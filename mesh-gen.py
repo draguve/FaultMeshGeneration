@@ -12,9 +12,9 @@ import pyvista as pv
 import py3dep
 
 
-def create_wall(long_lats, diff=1, R=6371, connectivity_delta=0):
-    all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + diff)
-    all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - diff)
+def create_wall(long_lats, up_diff=1, down_diff=1, R=6371, connectivity_delta=0):
+    all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
+    all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
     number_of_points, dim = all_cartesian_top.shape
     assert (dim == 3)
     connectivity = []
@@ -224,7 +224,6 @@ def apply_centering(mesh, center):
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
-scale_factor = 1
 to_generate = filtered_records[18:]
 all_vertices = []
 all_connectivity = []
@@ -234,8 +233,8 @@ for record in to_generate:
     all_lat_longs.append(lat_longs)
     new_points, dim = lat_longs.shape
     assert (dim == 3)
-    vertices, connectivity = create_wall(lat_longs, diff=20 * scale_factor, connectivity_delta=0,
-                                         R=radius * scale_factor)
+    vertices, connectivity = create_wall(lat_longs, up_diff=20, down_diff=250, connectivity_delta=0,
+                                         R=radius)
     all_vertices.append(vertices)
     all_connectivity.append(connectivity)
 all_long_lats = np.vstack(all_lat_longs)
@@ -245,31 +244,47 @@ dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
 assert (dem_res["30m"])
 res = 30
 dem = py3dep.get_dem(dep3_bounding_box, res)
-topograph_points = image_to_points(dem, step=10, scale_factor=scale_factor)
+topograph_points = image_to_points(dem, step=10)
 
 rotational_center = get_center(np.vstack(all_vertices))
 rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
 
-meshes = pv.MultiBlock()
-topo_mesh = pv.PolyData(topograph_points)
-topo_mesh = apply_rotation(topo_mesh, rotation_matrix)
-center = get_center(topo_mesh.points)
-topo_mesh = apply_centering(topo_mesh, center)
+all_fault_walls = pv.MultiBlock()
+topo_points = pv.PolyData(topograph_points)
+topo_points = apply_rotation(topo_points, rotation_matrix)
+center = get_center(topo_points.points)
+topo_points = apply_centering(topo_points, center)
 # topo_mesh["elevation"] = np.linalg.norm(topograph_points, axis=1)
-topo_mesh = topo_mesh.delaunay_2d()
+# topo_mesh = topo_mesh.delaunay_2d()
 # meshes.append(topo_mesh)
 for i in range(0, len(all_vertices)):
-    mesh = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
-    mesh = apply_rotation(mesh, rotation_matrix)
-    mesh = apply_centering(mesh, center)
+    fault_wall = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
+    fault_wall = apply_rotation(fault_wall, rotation_matrix)
+    fault_wall = apply_centering(fault_wall, center)
     # mesh["elevation"] = np.linalg.norm(all_vertices[i],axis=1)
-    mesh = mesh.triangulate()
-    meshes.append(mesh)  # comment this out to view elevation
+    fault_wall = fault_wall.triangulate()
+    all_fault_walls.append(fault_wall)  # comment this out to view elevation
 # meshes = meshes.combine().clean()
 
+plane = pv.Plane(
+    center=(topo_points.center[0], topo_points.center[1], -200),  # need to calculate these automatically
+    direction=(0, 0, -1),
+    i_size=2000,
+    j_size=2000,
+)
+extruded_mesh = topo_points.delaunay_2d().extrude_trim((0, 0, -1.0),
+                                                       plane).triangulate()  # clean this up too many in one go
 plotter = pv.Plotter()
 plotter.show_axes()
-plotter.show_grid()
-plotter.add_mesh(topo_mesh, show_edges=True)
-plotter.add_mesh(meshes, show_edges=True)
+# plotter.show_grid()
+plotter.add_mesh(plane, style='wireframe', color='black')
+plotter.add_mesh(extruded_mesh, style="wireframe", color="red")
+plotter.add_mesh(topo_points, show_edges=True)
+plotter.add_mesh(all_fault_walls, show_edges=True, color="green")
+intersection_meshes = extruded_mesh.intersection(all_fault_walls, split_first=False, split_second=False)
+intersection = intersection_meshes[0]
+plotter.add_mesh(intersection, color='yellow', line_width=5, render_lines_as_tubes=True)
+print(extruded_mesh.is_manifold)
+# intersected_topo_mesh = intersection_meshes[1]
+# plotter.add_mesh(intersected_topo_mesh,color="blue")
 plotter.show()
