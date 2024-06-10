@@ -112,3 +112,5 @@ webencodings==0.5.1
 websocket-client==1.8.0
 wheel==0.43.0
 xyzservices==2024.4.0
+
+py3dep~=0.16.3
