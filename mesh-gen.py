@@ -216,7 +216,7 @@ def apply_rotation(mesh, R):
     return mesh
 
 
-def center_points(mesh, center):
+def apply_centering(mesh, center):
     mesh.points = mesh.points - center
     return mesh
 
@@ -247,32 +247,29 @@ res = 30
 dem = py3dep.get_dem(dep3_bounding_box, res)
 topograph_points = image_to_points(dem, step=10, scale_factor=scale_factor)
 
-center = get_center(np.vstack(all_vertices))
-rotation_matrix = get_rotation_matrix_from_direction(center)
+rotational_center = get_center(np.vstack(all_vertices))
+rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
 
 meshes = pv.MultiBlock()
 topo_mesh = pv.PolyData(topograph_points)
-apply_rotation(topo_mesh, rotation_matrix)
+topo_mesh = apply_rotation(topo_mesh, rotation_matrix)
 center = get_center(topo_mesh.points)
-topo_mesh = center_points(topo_mesh, center)
-topo_mesh.plot()
-exit()
-print(topograph_points.shape)
-topo_mesh["elevation"] = np.linalg.norm(topograph_points, axis=1)
+topo_mesh = apply_centering(topo_mesh, center)
+# topo_mesh["elevation"] = np.linalg.norm(topograph_points, axis=1)
 topo_mesh = topo_mesh.delaunay_2d()
 # meshes.append(topo_mesh)
 for i in range(0, len(all_vertices)):
-    mesh = pv.PolyData(all_vertices[i] - center, all_connectivity[i])  # subtracting the center here center the mesh
+    mesh = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
+    mesh = apply_rotation(mesh, rotation_matrix)
+    mesh = apply_centering(mesh, center)
     # mesh["elevation"] = np.linalg.norm(all_vertices[i],axis=1)
     mesh = mesh.triangulate()
     meshes.append(mesh)  # comment this out to view elevation
 # meshes = meshes.combine().clean()
 
-# rotation_matrix = get_normal_rotation_matrix(topo_mesh)
-# topo_mesh = apply_rotation(topo_mesh, rotation_matrix)
 plotter = pv.Plotter()
-# topo_mesh = topo_mesh.compute_normals()
-# topo_mesh.plot_normals(mag=100, show_edges=True)
+plotter.show_axes()
+plotter.show_grid()
 plotter.add_mesh(topo_mesh, show_edges=True)
 plotter.add_mesh(meshes, show_edges=True)
 plotter.show()
