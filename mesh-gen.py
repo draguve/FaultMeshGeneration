@@ -13,6 +13,7 @@ import py3dep
 import vtk
 import tetgen
 
+
 def create_wall(long_lats, up_diff=1, down_diff=1, R=6371, connectivity_delta=0):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
     all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
@@ -225,7 +226,7 @@ def apply_centering(mesh, center):
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
-to_generate = filtered_records[18:19]
+to_generate = filtered_records[18:]
 all_vertices = []
 all_connectivity = []
 all_lat_longs = []
@@ -268,43 +269,64 @@ for i in range(0, len(all_vertices)):
 # meshes = meshes.combine().clean()
 
 plane = pv.Plane(
-    center=(topo_points.center[0], topo_points.center[1], -200),  # need to calculate these automatically
+    center=(topo_points.center[0], topo_points.center[1], -200),  # TODO need to calculate these automatically
     direction=(0, 0, -1),
     i_size=2000,
     j_size=2000,
 )
 extruded_mesh = topo_points.delaunay_2d().extrude_trim((0, 0, -1.0),
-                                                       plane).triangulate()  # clean this up too many in one go
+                                                       plane).triangulate()  # TODO clean this up too many in one go
 # plotter = pv.Plotter()
 # plotter.show_axes()
 # plotter.show_grid()
 # plotter.add_mesh(plane, style='wireframe', color='black')
 # plotter.add_mesh(extruded_mesh, style="wireframe", color="red")
 # plotter.add_mesh(topo_points, show_edges=True)
-# plotter.add_mesh(all_fault_walls, show_edges=True, color="yellow")
 merged = all_fault_walls.combine().extract_surface().clean()
 intersection_meshes = extruded_mesh.intersection(all_fault_walls, split_first=True, split_second=True)
 intersection = intersection_meshes[0]
 earth_surface_with_wall_points = intersection_meshes[1]
 wall_points_with_surface_points = intersection_meshes[2]
-mesh1 = earth_surface_with_wall_points.combine().extract_surface().clean()
-mesh2 = wall_points_with_surface_points.combine().extract_surface().clean()
+earth_surface_with_wall_points = earth_surface_with_wall_points.combine().extract_surface().clean()
+wall_points_with_surface_points = wall_points_with_surface_points.combine().extract_surface().clean()
+points = pv.wrap(earth_surface_with_wall_points.points)
+earth_surface_with_wall_points = points.delaunay_3d().extract_surface().clean()
+# iterate over all the different walls
 
-enclosed_points = mesh2.select_enclosed_points(mesh1, tolerance=0.1, check_surface=True)
-inside_points_mask = enclosed_points.point_data['SelectedPoints'].astype(bool)
-# inside_edges = mesh2.extract_points(inside_points_mask, adjacent_cells=False)
-inside_points2 = pv.PolyData(mesh2.points[inside_points_mask])
-inside_points = pv.PolyData(mesh2.points[inside_points_mask]).delaunay_2d()
+# print(earth_surface_with_wall_points2.is_manifold)
 
-# plotter = pv.Plotter()
+plotter = pv.Plotter()
+# plotter.add_mesh(all_fault_walls, show_edges=True, color="yellow")
+
 # plotter.add_mesh(mesh1, color='lightblue', opacity=0.5, label='Mesh 1')
 # plotter.add_mesh(inside_points, color='red', label='Filtered Mesh 2')
 
-joined = (mesh1 + inside_points)
 # plotter.add_mesh(inside_points2, color='red', style="wireframe")
+# plotter.add_mesh(earth_surface_with_wall_points, color='red', style="wireframe")
+joined = earth_surface_with_wall_points
+for i in range(0, len(all_vertices)):
+    # need to break each indiviudal wall peices where the collide with the surface
+    intersection_meshes = extruded_mesh.intersection(all_fault_walls, split_first=False, split_second=True)
+    intersected_wall = intersection_meshes[2].combine().extract_surface().clean()
+    enclosed_points = intersected_wall.select_enclosed_points(earth_surface_with_wall_points, tolerance=0.1,
+                                                              check_surface=True)
+    inside_points_mask = enclosed_points.point_data['SelectedPoints'].astype(bool)
 
-# plotter.add_mesh(joined, color='green', style="wireframe")
+    # get polydata with the points of the wall inside the surface
+    # inside_points2 = pv.PolyData(wall_points_with_surface_points.points[inside_points_mask])
+    inside_wall = pv.PolyData(intersected_wall.points[inside_points_mask]).delaunay_2d()
+    joined = (joined + inside_wall)
 
+plotter = pv.Plotter()
+# plotter.add_mesh(all_fault_walls, show_edges=True, color="yellow")
+
+# plotter.add_mesh(mesh1, color='lightblue', opacity=0.5, label='Mesh 1')
+# plotter.add_mesh(inside_points, color='red', label='Filtered Mesh 2')
+
+# plotter.add_mesh(inside_points2, color='red', style="wireframe")
+plotter.add_mesh(joined, color='green', style="wireframe")
+plotter.show()
+exit()
 tet = tetgen.TetGen(joined)
 tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
 grid = tet.grid
@@ -321,6 +343,9 @@ plotter.add_mesh(subgrid, 'lightgrey', lighting=True, show_edges=True)
 plotter.add_mesh(joined, 'r', 'wireframe')
 plotter.add_legend([[' Input Mesh ', 'r'],
                     [' Tessellated Mesh ', 'black']])
+
+plotter.add_mesh(inside_points2, color='blue', style="wireframe")
+plotter.add_mesh(all_fault_walls, show_edges=True, color="yellow")
 plotter.show()
 
 # plotter.add_mesh(inside_edges, color='green', label='Filtered Mesh 2')
