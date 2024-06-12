@@ -12,9 +12,11 @@ import pyvista as pv
 import py3dep
 import vtk
 import tetgen
-
+import matplotlib.colors as mcolors
 from vtkmodules.vtkFiltersCore import vtkCutter
 from vtkmodules.vtkCommonDataModel import vtkPlane
+
+
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
 # from vtkmodules.numpy_interface import dataset_adapter as dsa
 
@@ -34,37 +36,51 @@ def create_wall(long_lats, up_diff=1, down_diff=1, R=6371):
     return np.vstack((all_cartesian_top, all_cartesian_bottom)), connectivity
 
 
-def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh, up_diff=1, down_diff=1, R=6371):
+def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh, extruded_mesh, up_diff=1, down_diff=1,
+                               R=6371):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
     all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
     wall = pv.MultiBlock()
     number_of_points, dim = all_cartesian_top.shape
+    top_fixed = apply_rotation_points(all_cartesian_top, rotation_matrix)
+    top_fixed = apply_centering_points(top_fixed, center)
+    bottom_fixed = apply_rotation_points(all_cartesian_bottom, rotation_matrix)
+    bottom_fixed = apply_centering_points(bottom_fixed, center)
+    bounded_top = np.zeros(all_cartesian_top.shape)
+    bounded_bottom = np.zeros(all_cartesian_bottom.shape)
+    for i in range(number_of_points):
+        points, ind = extruded_mesh.ray_trace(top_fixed[i], bottom_fixed[i])
+        points2, ind = extruded_mesh.ray_trace(bottom_fixed[i], top_fixed[i])
+        assert points.shape[1] == 3 and points.shape[0] == 1
+        assert points2.shape[1] == 3 and points2.shape[0] == 1
+        bounded_top[i] = points[0]
+        bounded_bottom[i] = points2[0]
     assert (dim == 3)
+    connectivity = []
     for i in range(number_of_points - 1):
-        points = np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2]))
-        wall_piece = pv.PolyData(points, [4, 0, 1, 3, 2])
-        wall_piece = apply_rotation(wall_piece, rotation_matrix)
-        wall_piece = apply_centering(wall_piece, center)
-        wall_piece.triangulate().extract_surface().clean()
+        current_top = i
+        next_top = i + 1
+        current_bottom = number_of_points + i
+        next_bottom = number_of_points + i + 1
+        connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
+    return np.vstack((bounded_top, bounded_bottom)), connectivity
 
-        intersection = surface_mesh.slice_implicit(wall_piece)
-
-        # Step 4: Extract the intersection points
-        intersection_points = intersection.points
-
-        # Step 5: Create a new mesh from these intersection points
-        new_mesh = pv.PolyData(intersection_points)
-
-        plotter = pv.Plotter()
-        plotter.add_mesh(wall_piece, color='red', style="wireframe")
-        plotter.add_mesh(surface_mesh, color='yellow', style="wireframe")
-        plotter.add_mesh(new_mesh, color="blue")
-        # plotter.add_mesh(intersection,color="blue",opacity=0.5)
-        plotter.show()
-
-        # fault_wall = fault_wall.triangulate()
-        # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
-    return wall
+    # for i in range(number_of_points - 1):
+    #     points = np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2]))
+    #     wall_piece = pv.PolyData(points, [4, 0, 1, 3, 2])
+    #     wall_piece = apply_rotation(wall_piece, rotation_matrix)
+    #     wall_piece = apply_centering(wall_piece, center)
+    #     wall_piece.triangulate().extract_surface().clean()
+    #
+    #     points, ind = extruded_mesh.ray_trace(top_fixed[i], bottom_fixed[i])
+    #     points2, ind = extruded_mesh.ray_trace(bottom_fixed[i], top_fixed[i])
+    #     intersection1 = pv.PolyData(points2)
+    #     intersection2 = pv.PolyData(points)
+    #
+    #
+    #     # fault_wall = fault_wall.triangulate()
+    #     # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
+    # return wall
 
 
 def get_center(vertices):
@@ -256,9 +272,17 @@ def apply_rotation(mesh, R):
     return mesh
 
 
+def apply_rotation_points(points, R):
+    return np.dot(points, R.T)
+
+
 def apply_centering(mesh, center):
     mesh.points = mesh.points - center
     return mesh
+
+
+def apply_centering_points(points, center):
+    return points - center
 
 
 filtered_records = read_csv()
@@ -308,13 +332,52 @@ plane = pv.Plane(
     i_size=2000,
     j_size=2000,
 )
-extruded_mesh = topo_points.delaunay_2d().extrude_trim((0, 0, -1.0), plane).triangulate()
-all_walls = []
+topo_surface = topo_points.delaunay_2d()
+extruded_mesh = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
+all_wall_vertices = []
+all_wall_connectivity = []
 for i in range(num_walls):
-    wall_mesh = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, extruded_mesh, 20, 250, radius)
-    all_walls.append(wall_mesh)
+    vertices, connectivity = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
+                                                        extruded_mesh, 20,
+                                                        250, radius)
+    all_wall_vertices.append(vertices)
+    all_wall_connectivity.append(connectivity)
+
+# reconstruct surface mesh
+extra_surface_points = np.vstack(all_wall_vertices)
+all_surface_points = np.vstack((extruded_mesh.points, extra_surface_points))
+points = pv.wrap(all_surface_points)
+extruded_mesh = points.delaunay_3d()
 
 # Plotting the results
+# plotter = pv.Plotter()
+# colors = list(mcolors.CSS4_COLORS)
+# plotter.add_mesh(extruded_mesh, color='red', style="wireframe")
+# for i in range(num_walls):
+#     plotter.add_mesh(pv.PolyData(all_wall_vertices[i], all_wall_connectivity[i]), color=colors[i])
+# plotter.show()
+
+plc = pv.MultiBlock()
+plc.append(extruded_mesh)
+for i in range(num_walls):
+    plc.append(pv.PolyData(all_wall_vertices[i], all_wall_connectivity[i]).triangulate())
+plc = plc.combine().extract_surface().clean().triangulate().fill_holes(1000)
+
+
+tet = tetgen.TetGen(plc)
+tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
+grid = tet.grid
+# plotter.add_mesh(grid,opacity=0.3,show_edges=True)
+cells = grid.cells.reshape(-1, 5)[:, 1:]
+cell_center = grid.points[cells].mean(1)
+mask = cell_center[:, 2] < -100
+cell_ind = mask.nonzero()[0]
+subgrid = grid.extract_cells(cell_ind)
+
+# advanced plotting
 plotter = pv.Plotter()
-plotter.add_mesh(extruded_mesh, color='red', style="wireframe")
+plotter.add_mesh(subgrid, 'lightgrey', lighting=True, show_edges=True)
+plotter.add_mesh(plc, 'r', 'wireframe')
+plotter.add_legend([[' Input Mesh ', 'r'],
+                    [' Tessellated Mesh ', 'black']])
 plotter.show()
