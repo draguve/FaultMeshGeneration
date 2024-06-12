@@ -15,6 +15,7 @@ import tetgen
 import matplotlib.colors as mcolors
 from vtkmodules.vtkFiltersCore import vtkCutter
 from vtkmodules.vtkCommonDataModel import vtkPlane
+import pymeshfix
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -59,7 +60,8 @@ def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh,
         bounded_top[i] = points[0]
         bounded_bottom[i] = points2[0]
     assert (dim == 3)
-    connectivity = []
+    wall_mesh = pv.MultiBlock()
+    intersection_mesh = pv.MultiBlock()
     for i in range(number_of_points - 1):
         current_top = i
         next_top = i + 1
@@ -105,21 +107,29 @@ def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh,
                                          axis=1) < distance_between_top_point
 
         between_top_points = points_intersecting_with_plane[distance_from_A & distance_from_B]
-
-        plotter = pv.Plotter()
-        plotter.add_mesh(surface_mesh, 'blue', "wireframe")
-        plotter.add_mesh(pv.PolyData(quad_points, [4, 0, 1, 3, 2]), 'r', 'wireframe')
-        plotter.add_mesh(pv.PolyData(intersecting_with_plane.points), "green")
-        plotter.add_mesh(pv.PolyData(np.vstack((bounded_top[i:i + 2], bounded_bottom[i:i + 2]))), "yellow")
-        plotter.add_mesh(projected_points_polydata, "violet")
-        n, dim = between_top_points.shape
-        if n > 0:
-            plotter.add_mesh(pv.PolyData(between_top_points), "black")
-        plotter.show()
+        wall_vert = np.vstack(
+            (bounded_top[i], between_top_points, bounded_top[i + 1], bounded_bottom[i + 1], bounded_bottom[i]))
+        n, _ = wall_vert.shape
+        wall_connectivity = [n] + list(range(n))
+        wall_mesh.append(pv.PolyData(wall_vert, wall_connectivity))
+        intersection_mesh.append(
+            pv.PolyData(np.vstack((top_fixed[i], top_fixed[i + 1], bottom_fixed[i + 1], bottom_fixed[i])),
+                        [4, 0, 1, 2, 3]))
+        # plotter = pv.Plotter()
+        # plotter.add_mesh(surface_mesh, 'blue', "wireframe")
+        # plotter.add_mesh(pv.PolyData(quad_points, [4, 0, 1, 3, 2]), 'r', 'wireframe')
+        # plotter.add_mesh(pv.PolyData(intersecting_with_plane.points), "green")
+        # plotter.add_mesh(pv.PolyData(np.vstack((bounded_top[i:i + 2], bounded_bottom[i:i + 2]))), "yellow")
+        # plotter.add_mesh(projected_points_polydata, "violet")
+        # plotter.add_mesh(pv.PolyData(wall_vert, wall_connectivity), "orange")
+        # n, dim = between_top_points.shape
+        # if n > 0:
+        #     plotter.add_mesh(pv.PolyData(between_top_points), "black")
+        # plotter.show()
         # data = is_points_in_quad(quad_points, intersecting_with_surface.points)
-        connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
+        # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
 
-    return np.vstack((bounded_top, bounded_bottom)), connectivity
+    return wall_mesh.combine(), intersection_mesh.combine()
 
     # for i in range(number_of_points - 1):
     #     points = np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2]))
@@ -344,7 +354,7 @@ def apply_centering_points(points, center):
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
-to_generate = filtered_records[19:20]
+to_generate = filtered_records[18:19]
 num_walls = len(to_generate)
 all_lat_longs = []
 # all_vertices = []
@@ -390,39 +400,56 @@ plane = pv.Plane(
 )
 topo_surface = topo_points.delaunay_2d()
 extruded_mesh = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
+all_wall_meshes = pv.MultiBlock()
+all_intersection_meshes = pv.MultiBlock()
 all_wall_vertices = []
-all_wall_connectivity = []
 for i in range(num_walls):
-    vertices, connectivity = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
-                                                        extruded_mesh, 20,
-                                                        250, radius)
-    all_wall_vertices.append(vertices)
-    all_wall_connectivity.append(connectivity)
+    wall_mesh, intersection_mesh = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
+                                                              extruded_mesh, 20,
+                                                              250, radius)
+    all_wall_meshes.append(wall_mesh)
+    all_wall_vertices.append(wall_mesh.points)
+    all_intersection_meshes.append(intersection_mesh)
 
 # reconstruct surface mesh
 extra_surface_points = np.vstack(all_wall_vertices)
 all_surface_points = np.vstack((extruded_mesh.points, extra_surface_points))
 points = pv.wrap(all_surface_points)
-extruded_mesh = points.delaunay_3d()
+extruded_mesh = points.delaunay_3d(tol=0.000001)
 
-# Plotting the results
-# plotter = pv.Plotter()
-# colors = list(mcolors.CSS4_COLORS)
-# plotter.add_mesh(extruded_mesh, color='red', style="wireframe")
-# for i in range(num_walls):
-#     plotter.add_mesh(pv.PolyData(all_wall_vertices[i], all_wall_connectivity[i]), color=colors[i])
-# plotter.show()
+# merged = all_intersection_meshes.combine().extract_surface().clean()
+# intersection_meshes = extruded_mesh.intersection(all_intersection_meshes, split_first=True, split_second=True)
+# intersection = intersection_meshes[0]
+# earth_surface_with_wall_points = intersection_meshes[1]
+# wall_points_with_surface_points = intersection_meshes[2]
+# mesh1 = earth_surface_with_wall_points.combine().extract_surface().clean()
 
-plc = pv.MultiBlock()
-plc.append(extruded_mesh)
+
+plc = extruded_mesh
+walls_only = pv.MultiBlock()
+# plc.append(extruded_mesh)
 for i in range(num_walls):
-    plc.append(pv.PolyData(all_wall_vertices[i], all_wall_connectivity[i]).triangulate())
-plc = plc.combine().extract_surface().clean().triangulate().fill_holes(1000)
+    # plc.append(all_wall_meshes[i])
+    plc = plc + all_wall_meshes[i]
+    walls_only.append(all_wall_meshes[i])
+plc = plc.extract_geometry().triangulate()
+walls_only = walls_only.combine().triangulate()
+
+non_manifold = plc.extract_feature_edges(non_manifold_edges=True, boundary_edges=False, feature_edges=False,
+                                         manifold_edges=True, clear_data=True)
+#
+plotter = pv.Plotter()
+# plotter.add_mesh(extruded_mesh, 'yellow', "wireframe")
+# plotter.add_mesh(walls_only, "blue")
+plotter.add_mesh(plc, "black", "wireframe")
+plotter.add_mesh(non_manifold, "red")
+plotter.show()
 
 tet = tetgen.TetGen(plc)
-tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
+# tet.make_manifold(True)
+tet.tetrahedralize(order=1, mindihedral=10, minratio=1.1, quality=True)
 grid = tet.grid
-# plotter.add_mesh(grid,opacity=0.3,show_edges=True)
+plotter.add_mesh(grid, opacity=0.3, show_edges=True)
 cells = grid.cells.reshape(-1, 5)[:, 1:]
 cell_center = grid.points[cells].mean(1)
 mask = cell_center[:, 2] < -100
