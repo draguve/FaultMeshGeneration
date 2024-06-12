@@ -19,6 +19,10 @@ from vtkmodules.vtkCommonDataModel import vtkPlane
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
 # from vtkmodules.numpy_interface import dataset_adapter as dsa
+def project_to_plane(points, plane_normal, plane_point):
+    plane_normal = plane_normal / np.linalg.norm(plane_normal)
+    projection = points - np.dot(points - plane_point, plane_normal)[:, None] * plane_normal
+    return projection
 
 
 def create_wall(long_lats, up_diff=1, down_diff=1, R=6371):
@@ -40,7 +44,6 @@ def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh,
                                R=6371):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
     all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
-    wall = pv.MultiBlock()
     number_of_points, dim = all_cartesian_top.shape
     top_fixed = apply_rotation_points(all_cartesian_top, rotation_matrix)
     top_fixed = apply_centering_points(top_fixed, center)
@@ -62,7 +65,60 @@ def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh,
         next_top = i + 1
         current_bottom = number_of_points + i
         next_bottom = number_of_points + i + 1
+        quad_points = np.vstack((top_fixed[i:i + 2], bottom_fixed[i:i + 2]))
+        # Create a plane from the quad points
+        # Here we assume the quad points lie on a plane. We calculate the normal and center of the plane
+        quad_center = np.mean(quad_points, axis=0)
+        quad_normal = np.cross(quad_points[1] - quad_points[0], quad_points[2] - quad_points[0])
+        quad_normal = quad_normal / np.linalg.norm(quad_normal)
+        intersecting_with_plane = surface_mesh.slice(quad_normal, quad_center)
+        points_intersecting_with_plane = intersecting_with_plane.points
+
+        # Create an orthogonal normal vector (you can choose any vector orthogonal to quad_normal)
+        # For simplicity, let's choose one based on an arbitrary vector, e.g., [1, 0, 0]
+        # Ensure it's not collinear with quad_normal
+        arbitrary_vector = np.array([1, 0, 0])
+        if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
+            arbitrary_vector = np.array([0, 1, 0])
+
+        # Ensure it's not collinear with quad_normal
+        if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
+            # If it's collinear, adjust the arbitrary vector
+            arbitrary_vector = np.array([0, 1, 0])
+            if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
+                # If it's still collinear (unlikely), choose another orthogonal vector
+                arbitrary_vector = np.array([0, 0, 1])
+
+        orthogonal_vector = np.cross(quad_normal, arbitrary_vector)
+        orthogonal_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+
+        # Calculate the orthogonal plane center
+        orthogonal_plane_center = quad_center
+        projected_points = project_to_plane(points_intersecting_with_plane, orthogonal_vector, orthogonal_plane_center)
+        projected_top_points = project_to_plane(top_fixed[i:i + 2], orthogonal_vector, orthogonal_plane_center)
+
+        projected_points_polydata = pv.PolyData(projected_points)
+        distance_between_top_point = np.linalg.norm(projected_top_points[1] - projected_top_points[0])
+        distance_from_A = np.linalg.norm(projected_points - projected_top_points[0],
+                                         axis=1) < distance_between_top_point
+        distance_from_B = np.linalg.norm(projected_points - projected_top_points[1],
+                                         axis=1) < distance_between_top_point
+
+        between_top_points = points_intersecting_with_plane[distance_from_A & distance_from_B]
+
+        plotter = pv.Plotter()
+        plotter.add_mesh(surface_mesh, 'blue', "wireframe")
+        plotter.add_mesh(pv.PolyData(quad_points, [4, 0, 1, 3, 2]), 'r', 'wireframe')
+        plotter.add_mesh(pv.PolyData(intersecting_with_plane.points), "green")
+        plotter.add_mesh(pv.PolyData(np.vstack((bounded_top[i:i + 2], bounded_bottom[i:i + 2]))), "yellow")
+        plotter.add_mesh(projected_points_polydata, "violet")
+        n, dim = between_top_points.shape
+        if n > 0:
+            plotter.add_mesh(pv.PolyData(between_top_points), "black")
+        plotter.show()
+        # data = is_points_in_quad(quad_points, intersecting_with_surface.points)
         connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
+
     return np.vstack((bounded_top, bounded_bottom)), connectivity
 
     # for i in range(number_of_points - 1):
@@ -288,7 +344,7 @@ def apply_centering_points(points, center):
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
-to_generate = filtered_records[18:19]
+to_generate = filtered_records[19:20]
 num_walls = len(to_generate)
 all_lat_longs = []
 # all_vertices = []
@@ -362,7 +418,6 @@ plc.append(extruded_mesh)
 for i in range(num_walls):
     plc.append(pv.PolyData(all_wall_vertices[i], all_wall_connectivity[i]).triangulate())
 plc = plc.combine().extract_surface().clean().triangulate().fill_holes(1000)
-
 
 tet = tetgen.TetGen(plc)
 tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
