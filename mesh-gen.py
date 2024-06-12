@@ -13,6 +13,11 @@ import py3dep
 import vtk
 import tetgen
 
+from vtkmodules.vtkFiltersCore import vtkCutter
+from vtkmodules.vtkCommonDataModel import vtkPlane
+# from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
+# from vtkmodules.numpy_interface import dataset_adapter as dsa
+
 
 def create_wall(long_lats, up_diff=1, down_diff=1, R=6371):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
@@ -36,29 +41,27 @@ def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh,
     number_of_points, dim = all_cartesian_top.shape
     assert (dim == 3)
     for i in range(number_of_points - 1):
-        wall_piece = pv.PolyData(np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2])),
-                                 [4, 0, 1, 3, 2])
-
+        points = np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2]))
+        wall_piece = pv.PolyData(points, [4, 0, 1, 3, 2])
         wall_piece = apply_rotation(wall_piece, rotation_matrix)
         wall_piece = apply_centering(wall_piece, center)
-        wall_piece.triangulate()
-        intersection_outputs = surface_mesh.intersection(wall_piece, split_first=True, split_second=True)
-        intersection = intersection_outputs[0]
-        intersected_surface = intersection_outputs[1]
-        intersected_wall = intersection_outputs[2]
-        enclosed_points = intersected_wall.select_enclosed_points(intersected_surface, tolerance=0.1,
-                                                                  check_surface=True)
-        collision, num_col = wall_piece.collision(surface_mesh)
+        wall_piece.triangulate().extract_surface().clean()
+
+        intersection = surface_mesh.slice_implicit(wall_piece)
+
+        # Step 4: Extract the intersection points
+        intersection_points = intersection.points
+
+        # Step 5: Create a new mesh from these intersection points
+        new_mesh = pv.PolyData(intersection_points)
+
         plotter = pv.Plotter()
         plotter.add_mesh(wall_piece, color='red', style="wireframe")
         plotter.add_mesh(surface_mesh, color='yellow', style="wireframe")
-        plotter.add_mesh(collision, color="blue")
+        plotter.add_mesh(new_mesh, color="blue")
         # plotter.add_mesh(intersection,color="blue",opacity=0.5)
         plotter.show()
-        enclosed_points_mask = enclosed_points.point_data['SelectedPoints'].astype(bool)
-        enclosed_points = intersected_wall.points[enclosed_points_mask]
-        inside_points = pv.PolyData(enclosed_points)
-        wall.append(inside_points)
+
         # fault_wall = fault_wall.triangulate()
         # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
     return wall
