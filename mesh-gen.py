@@ -8,10 +8,9 @@ import csv
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
-import pyvista as pv
+import gmsh
 import py3dep
-import vtk
-import tetgen
+
 
 def create_wall(long_lats, up_diff=1, down_diff=1, R=6371, connectivity_delta=0):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
@@ -211,33 +210,23 @@ def get_normal_rotation_matrix(mesh):
     return get_rotation_matrix_from_direction(normal)
 
 
-def apply_rotation(mesh, R):
+def apply_rotation(points, R):
     # Apply the rotation matrix to the mesh points
-    mesh.points = np.dot(mesh.points, R.T)
-    return mesh
+    return np.dot(points, R.T)
 
 
-def apply_centering(mesh, center):
-    mesh.points = mesh.points - center
-    return mesh
+def apply_centering(points, center):
+    return points - center
 
 
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
 to_generate = filtered_records[18:19]
-all_vertices = []
-all_connectivity = []
 all_lat_longs = []
 for record in to_generate:
     lat_longs = get_points(record)
     all_lat_longs.append(lat_longs)
-    new_points, dim = lat_longs.shape
-    assert (dim == 3)
-    vertices, connectivity = create_wall(lat_longs, up_diff=20, down_diff=250, connectivity_delta=0,
-                                         R=radius)
-    all_vertices.append(vertices)
-    all_connectivity.append(connectivity)
 all_long_lats = np.vstack(all_lat_longs)
 bounding_box = generate_extended_bounding_box(all_long_lats, 0.01)
 dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
@@ -245,83 +234,31 @@ dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
 assert (dem_res["30m"])
 res = 30
 dem = py3dep.get_dem(dep3_bounding_box, res)
-topograph_points = image_to_points(dem, step=10)
-
-rotational_center = get_center(np.vstack(all_vertices))
+topo_points = image_to_points(dem, step=10)
+rotational_center = get_center(topo_points)
 rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
-
-all_fault_walls = pv.MultiBlock()
-topo_points = pv.PolyData(topograph_points)
 topo_points = apply_rotation(topo_points, rotation_matrix)
-center = get_center(topo_points.points)
+center = get_center(topo_points)
 topo_points = apply_centering(topo_points, center)
-# topo_mesh["elevation"] = np.linalg.norm(topograph_points, axis=1)
-# topo_mesh = topo_mesh.delaunay_2d()
-# meshes.append(topo_mesh)
-for i in range(0, len(all_vertices)):
-    fault_wall = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
-    fault_wall = apply_rotation(fault_wall, rotation_matrix)
-    fault_wall = apply_centering(fault_wall, center)
-    # mesh["elevation"] = np.linalg.norm(all_vertices[i],axis=1)
-    fault_wall = fault_wall.triangulate()
-    all_fault_walls.append(fault_wall)  # comment this out to view elevation
-# meshes = meshes.combine().clean()
 
-plane = pv.Plane(
-    center=(topo_points.center[0], topo_points.center[1], -200),  # need to calculate these automatically
-    direction=(0, 0, -1),
-    i_size=2000,
-    j_size=2000,
-)
-extruded_mesh = topo_points.delaunay_2d().extrude_trim((0, 0, -1.0),
-                                                       plane).triangulate()  # clean this up too many in one go
-# plotter = pv.Plotter()
-# plotter.show_axes()
-# plotter.show_grid()
-# plotter.add_mesh(plane, style='wireframe', color='black')
-# plotter.add_mesh(extruded_mesh, style="wireframe", color="red")
-# plotter.add_mesh(topo_points, show_edges=True)
-# plotter.add_mesh(all_fault_walls, show_edges=True, color="yellow")
-merged = all_fault_walls.combine().extract_surface().clean()
-intersection_meshes = extruded_mesh.intersection(all_fault_walls, split_first=True, split_second=True)
-intersection = intersection_meshes[0]
-earth_surface_with_wall_points = intersection_meshes[1]
-wall_points_with_surface_points = intersection_meshes[2]
-mesh1 = earth_surface_with_wall_points.combine().extract_surface().clean()
-mesh2 = wall_points_with_surface_points.combine().extract_surface().clean()
+gmsh.initialize()
+# Create a new Gmsh model
+model = gmsh.model
+model.add("topo_mesh")
+# Define a Gmsh Point entity for each point in topo_mesh
+point_tags = []
+num_points, dim = topo_points.shape
+assert (dim == 3)
+for i in range(num_points):
+    x, y, z = topo_points[i]
+    point_tag = model.geo.addPoint(x, y, z)
+    point_tags.append(point_tag)
 
-enclosed_points = mesh2.select_enclosed_points(mesh1, tolerance=0.1, check_surface=True)
-inside_points_mask = enclosed_points.point_data['SelectedPoints'].astype(bool)
-# inside_edges = mesh2.extract_points(inside_points_mask, adjacent_cells=False)
-inside_points2 = pv.PolyData(mesh2.points[inside_points_mask])
-inside_points = pv.PolyData(mesh2.points[inside_points_mask]).delaunay_2d()
+# Generate the mesh
+model.geo.synchronize()
 
-# plotter = pv.Plotter()
-# plotter.add_mesh(mesh1, color='lightblue', opacity=0.5, label='Mesh 1')
-# plotter.add_mesh(inside_points, color='red', label='Filtered Mesh 2')
 
-joined = (mesh1 + inside_points)
-# plotter.add_mesh(inside_points2, color='red', style="wireframe")
+gmsh.fltk.run()
 
-# plotter.add_mesh(joined, color='green', style="wireframe")
-
-tet = tetgen.TetGen(joined)
-tet.tetrahedralize(order=1, mindihedral=20, minratio=1.5)
-grid = tet.grid
-# plotter.add_mesh(grid,opacity=0.3,show_edges=True)
-cells = grid.cells.reshape(-1, 5)[:, 1:]
-cell_center = grid.points[cells].mean(1)
-mask = cell_center[:, 2] < -100
-cell_ind = mask.nonzero()[0]
-subgrid = grid.extract_cells(cell_ind)
-
-# advanced plotting
-plotter = pv.Plotter()
-plotter.add_mesh(subgrid, 'lightgrey', lighting=True, show_edges=True)
-plotter.add_mesh(joined, 'r', 'wireframe')
-plotter.add_legend([[' Input Mesh ', 'r'],
-                    [' Tessellated Mesh ', 'black']])
-plotter.show()
-
-# plotter.add_mesh(inside_edges, color='green', label='Filtered Mesh 2')
-# plotter.show()
+# Finalize the Gmsh API
+gmsh.finalize()
