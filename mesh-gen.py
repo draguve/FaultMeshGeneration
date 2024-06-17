@@ -15,7 +15,8 @@ import tetgen
 import matplotlib.colors as mcolors
 from vtkmodules.vtkFiltersCore import vtkCutter
 from vtkmodules.vtkCommonDataModel import vtkPlane
-import pymeshfix
+import gmsh
+import sys
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -296,8 +297,20 @@ def image_to_points(dep, step=50, scale_factor=1):
         longs[:] = label
         verts = get_cartesian(lat=lats, lon=longs, R=6371 * scale_factor, diff=(diffs / 1000))  # again this is weird
         points.append(verts[::step])
+    verts_in_order = np.stack(points)
+    connectivity = []
     verts = np.vstack(points)
-    return verts
+    x_dim, y_dim, _ = verts_in_order.shape
+    points_map = np.array(verts_in_order.shape, dtype=int)
+    for i in range(0, x_dim - 1):
+        for j in range(0, y_dim - 1):
+            this_connectivity = [4, (i * y_dim) + j, (i * y_dim) + j + 1, ((i + 1) * y_dim) + j + 1,
+                                 ((i + 1) * y_dim) + j]
+            connectivity.extend(this_connectivity)
+    for i in range(0, x_dim - 1):
+        for j in range(0, y_dim - 1):
+            points_map[i, j] = i * y_dim + j
+    return verts, verts_in_order, connectivity,points_map
 
 
 def read_csv():
@@ -351,6 +364,17 @@ def apply_centering_points(points, center):
     return points - center
 
 
+# returns surface_tag,loop_tag,[line_tag0,line_tag1,line_tag2]
+def generate_triangle(triangle_faces, gmsh_tags_map):
+    mapped = gmsh_tags_map[triangle_faces]
+    a = gmsh.model.geo.addLine(mapped[0], mapped[1])
+    b = gmsh.model.geo.addLine(mapped[1], mapped[2])
+    c = gmsh.model.geo.addLine(mapped[2], mapped[0])
+    loop_tag = gmsh.model.geo.addCurveLoop([a, b, c])
+    surface_tag = gmsh.model.geo.addPlaneSurface([loop_tag])
+    return surface_tag, loop_tag, (a, b, c)
+
+
 filtered_records = read_csv()
 print(filtered_records)
 radius = 6371
@@ -375,91 +399,69 @@ dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
 assert (dem_res["30m"])
 res = 30
 dem = py3dep.get_dem(dep3_bounding_box, res)
-topograph_points = image_to_points(dem, step=10)
+topograph_points, topograph_points_in_order, topograph_connectivity,topo_points_map = image_to_points(dem, step=10)
 
 rotational_center = get_center(np.vstack(topograph_points))
 rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
 
-topo_points = pv.PolyData(topograph_points)
+topo_points = pv.PolyData(topograph_points, topograph_connectivity)
 topo_points = apply_rotation(topo_points, rotation_matrix)
 center = get_center(topo_points.points)
 topo_points = apply_centering(topo_points, center)
 
+depth = 10
+topo_bottom_points = topo_points.copy()
+delta = np.array((0, 0, -1)) * depth
+topo_bottom_points.points = topo_bottom_points.points + delta
+
+plotter = pv.Plotter()
+plotter.add_mesh(topo_points, 'blue', "wireframe")
+plotter.add_mesh(topo_bottom_points, 'red', "wireframe")
+plotter.show()
+
+# all_wall_meshes = pv.MultiBlock()
+# all_intersection_meshes = pv.MultiBlock()
+# all_wall_vertices = []
 # for i in range(num_walls):
-#     fault_wall = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
-#     fault_wall = apply_rotation(fault_wall, rotation_matrix)
-#     fault_wall = apply_centering(fault_wall, center)
-#     fault_wall = fault_wall.triangulate()
-#     all_fault_walls.append(fault_wall)  # comment this out to view elevation
+#     wall_mesh, intersection_mesh = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
+#                                                               extruded_mesh, 20,
+#                                                               250, radius)
+#     all_wall_meshes.append(wall_mesh)
+#     all_wall_vertices.append(wall_mesh.points)
+#     all_intersection_meshes.append(intersection_mesh)
 
-plane = pv.Plane(
-    center=(topo_points.center[0], topo_points.center[1], -200),  # need to calculate these automatically
-    direction=(0, 0, -1),
-    i_size=2000,
-    j_size=2000,
-)
-topo_surface = topo_points.delaunay_2d()
-extruded_mesh = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
-all_wall_meshes = pv.MultiBlock()
-all_intersection_meshes = pv.MultiBlock()
-all_wall_vertices = []
-for i in range(num_walls):
-    wall_mesh, intersection_mesh = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
-                                                              extruded_mesh, 20,
-                                                              250, radius)
-    all_wall_meshes.append(wall_mesh)
-    all_wall_vertices.append(wall_mesh.points)
-    all_intersection_meshes.append(intersection_mesh)
+# model = gmsh.model
+# factory = model.occ
+# mesh = model.mesh
 
-# reconstruct surface mesh
-extra_surface_points = np.vstack(all_wall_vertices)
-all_surface_points = np.vstack((extruded_mesh.points, extra_surface_points))
-points = pv.wrap(all_surface_points)
-extruded_mesh = points.delaunay_3d(tol=0.000001)
+exit()
 
-# merged = all_intersection_meshes.combine().extract_surface().clean()
-# intersection_meshes = extruded_mesh.intersection(all_intersection_meshes, split_first=True, split_second=True)
-# intersection = intersection_meshes[0]
-# earth_surface_with_wall_points = intersection_meshes[1]
-# wall_points_with_surface_points = intersection_meshes[2]
-# mesh1 = earth_surface_with_wall_points.combine().extract_surface().clean()
+gmsh.initialize()
+gmsh.model.add("Fault")
+gmsh_tags_map = np.zeros(topo_surface.n_points, dtype=int)
+for i in range(topo_surface.n_points):
+    x, y, z = topo_surface.points[i]
+    gmsh_tags_map[i] = gmsh.model.geo.addPoint(x, y, z, .5)
 
+assert topo_surface.is_all_triangles
+faces = topo_surface.faces.reshape((-1, 4))  # Get the faces
+triangles = faces[:, 1:]  # Skip the first column which indicates the number of vertices (in a triangles only mesh)
+n_triangles, _ = triangles.shape
+surfaces = []
+vector = []
+for i in range(n_triangles):
+    surface_tag, loop_tag, [line_tag0, line_tag1, line_tag2] = generate_triangle(triangles[i], gmsh_tags_map)
+    surfaces.append(surface_tag)
+    vector.append((2, surface_tag))
 
-plc = extruded_mesh
-walls_only = pv.MultiBlock()
-# plc.append(extruded_mesh)
-for i in range(num_walls):
-    # plc.append(all_wall_meshes[i])
-    plc = plc + all_wall_meshes[i]
-    walls_only.append(all_wall_meshes[i])
-plc = plc.extract_geometry().triangulate()
-walls_only = walls_only.combine().triangulate()
+gmsh.model.geo.extrude(vector, 0, 0, -20)
+# surface_loop = gmsh.model.geo.addSurfaceLoop(surfaces)
+# volume = gmsh.model.geo.addVolume([surface_loop])
+# gmsh.model.geo.addPointOnGeometry()
 
-non_manifold = plc.extract_feature_edges(non_manifold_edges=True, boundary_edges=False, feature_edges=False,
-                                         manifold_edges=True, clear_data=True)
-#
-plotter = pv.Plotter()
-# plotter.add_mesh(extruded_mesh, 'yellow', "wireframe")
-# plotter.add_mesh(walls_only, "blue")
-plotter.add_mesh(plc, "black", "wireframe")
-plotter.add_mesh(non_manifold, "red")
-plotter.show()
+# gmsh.model.geo.addPhysicalGroup(2, surfaces)
+# gmsh.model.geo.addPhysicalGroup(3, [volume])
 
-tet = tetgen.TetGen(plc)
-# tet.make_manifold(True)
-tet.tetrahedralize(order=1, mindihedral=10, minratio=1.1, quality=True)
-grid = tet.grid
-plotter.add_mesh(grid, opacity=0.3, show_edges=True)
-cells = grid.cells.reshape(-1, 5)[:, 1:]
-cell_center = grid.points[cells].mean(1)
-mask = cell_center[:, 2] < -100
-cell_ind = mask.nonzero()[0]
-subgrid = grid.extract_cells(cell_ind)
-
-# advanced plotting
-plotter = pv.Plotter()
-plotter.add_mesh(subgrid, 'lightgrey', lighting=True, show_edges=True)
-plotter.add_mesh(plc, 'r', 'wireframe')
-plotter.add_legend([[' Input Mesh ', 'r'],
-                    [' Tessellated Mesh ', 'black']])
-plotter.show()
+gmsh.model.geo.synchronize()
+gmsh.fltk.run()
+gmsh.finalize()
