@@ -297,20 +297,55 @@ def image_to_points(dep, step=50, scale_factor=1):
         longs[:] = label
         verts = get_cartesian(lat=lats, lon=longs, R=6371 * scale_factor, diff=(diffs / 1000))  # again this is weird
         points.append(verts[::step])
+
     verts_in_order = np.stack(points)
     connectivity = []
     verts = np.vstack(points)
     x_dim, y_dim, _ = verts_in_order.shape
-    points_map = np.array(verts_in_order.shape, dtype=int)
+    points_map = np.zeros(verts_in_order.shape[:-1], dtype=int)
+
+    rotational_center = get_center(np.vstack(verts))
+    rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
+    verts = apply_rotation_points(verts, rotation_matrix)
+    center = get_center(verts)
+    verts = apply_centering_points(verts, center)
+
+    depth = 10
+    verts_bottom_points = verts.copy()
+    delta = np.array((0, 0, -1)) * depth
+    verts_bottom_points = verts_bottom_points + delta
+
+    num_points, _ = verts.shape
+
     for i in range(0, x_dim - 1):
         for j in range(0, y_dim - 1):
             this_connectivity = [4, (i * y_dim) + j, (i * y_dim) + j + 1, ((i + 1) * y_dim) + j + 1,
                                  ((i + 1) * y_dim) + j]
             connectivity.extend(this_connectivity)
-    for i in range(0, x_dim - 1):
-        for j in range(0, y_dim - 1):
+            bottom_connectivity = [4, num_points + (i * y_dim) + j, num_points + (i * y_dim) + j + 1,
+                                   num_points + ((i + 1) * y_dim) + j + 1,
+                                   num_points + ((i + 1) * y_dim) + j]
+            connectivity.extend(bottom_connectivity)
+    for i in range(0, x_dim):
+        for j in range(0, y_dim):
             points_map[i, j] = i * y_dim + j
-    return verts, verts_in_order, connectivity,points_map
+    for i in range(0, x_dim - 1):
+        side_wall_connectivity = [4, points_map[i, 0], points_map[i + 1, 0], points_map[i + 1, 0] + num_points,
+                                  points_map[i, 0] + num_points]
+        other_side_wall_connectivity = [4, points_map[i, y_dim - 1], points_map[i + 1, y_dim - 1],
+                                        points_map[i + 1, y_dim - 1] + num_points,
+                                        points_map[i, y_dim - 1] + num_points]
+        connectivity.extend(side_wall_connectivity)
+        connectivity.extend(other_side_wall_connectivity)
+    for i in range(0, y_dim - 1):
+        side_wall_connectivity = [4, points_map[0, i], points_map[0, i + 1], points_map[0, i + 1] + num_points,
+                                  points_map[0, i] + num_points]
+        other_side_wall_connectivity = [4, points_map[x_dim - 1, i], points_map[x_dim - 1, i + 1],
+                                        points_map[x_dim - 1, i + 1] + num_points,
+                                        points_map[x_dim - 1, i] + num_points]
+        connectivity.extend(side_wall_connectivity)
+        connectivity.extend(other_side_wall_connectivity)
+    return np.vstack((verts, verts_bottom_points)), verts_in_order, connectivity, points_map
 
 
 def read_csv():
@@ -365,14 +400,15 @@ def apply_centering_points(points, center):
 
 
 # returns surface_tag,loop_tag,[line_tag0,line_tag1,line_tag2]
-def generate_triangle(triangle_faces, gmsh_tags_map):
-    mapped = gmsh_tags_map[triangle_faces]
+def generate_quad(quads_faces, gmsh_tags_map):
+    mapped = gmsh_tags_map[quads_faces]
     a = gmsh.model.geo.addLine(mapped[0], mapped[1])
     b = gmsh.model.geo.addLine(mapped[1], mapped[2])
-    c = gmsh.model.geo.addLine(mapped[2], mapped[0])
-    loop_tag = gmsh.model.geo.addCurveLoop([a, b, c])
+    c = gmsh.model.geo.addLine(mapped[2], mapped[3])
+    d = gmsh.model.geo.addLine(mapped[3], mapped[0])
+    loop_tag = gmsh.model.geo.addCurveLoop([a, b, c, d])
     surface_tag = gmsh.model.geo.addPlaneSurface([loop_tag])
-    return surface_tag, loop_tag, (a, b, c)
+    return surface_tag, loop_tag, (a, b, c, d)
 
 
 filtered_records = read_csv()
@@ -399,25 +435,7 @@ dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
 assert (dem_res["30m"])
 res = 30
 dem = py3dep.get_dem(dep3_bounding_box, res)
-topograph_points, topograph_points_in_order, topograph_connectivity,topo_points_map = image_to_points(dem, step=10)
-
-rotational_center = get_center(np.vstack(topograph_points))
-rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
-
-topo_points = pv.PolyData(topograph_points, topograph_connectivity)
-topo_points = apply_rotation(topo_points, rotation_matrix)
-center = get_center(topo_points.points)
-topo_points = apply_centering(topo_points, center)
-
-depth = 10
-topo_bottom_points = topo_points.copy()
-delta = np.array((0, 0, -1)) * depth
-topo_bottom_points.points = topo_bottom_points.points + delta
-
-plotter = pv.Plotter()
-plotter.add_mesh(topo_points, 'blue', "wireframe")
-plotter.add_mesh(topo_bottom_points, 'red', "wireframe")
-plotter.show()
+topograph_points, topograph_points_in_order, topograph_connectivity, topo_points_map = image_to_points(dem, step=10)
 
 # all_wall_meshes = pv.MultiBlock()
 # all_intersection_meshes = pv.MultiBlock()
@@ -434,29 +452,26 @@ plotter.show()
 # factory = model.occ
 # mesh = model.mesh
 
-exit()
-
 gmsh.initialize()
 gmsh.model.add("Fault")
-gmsh_tags_map = np.zeros(topo_surface.n_points, dtype=int)
-for i in range(topo_surface.n_points):
-    x, y, z = topo_surface.points[i]
-    gmsh_tags_map[i] = gmsh.model.geo.addPoint(x, y, z, .5)
+n_points, _ = topograph_points.shape
+gmsh_tags_map = np.zeros(n_points, dtype=int)
+for i in range(n_points):
+    x, y, z = topograph_points[i]
+    gmsh_tags_map[i] = gmsh.model.geo.addPoint(x, y, z, 1)
 
-assert topo_surface.is_all_triangles
-faces = topo_surface.faces.reshape((-1, 4))  # Get the faces
-triangles = faces[:, 1:]  # Skip the first column which indicates the number of vertices (in a triangles only mesh)
-n_triangles, _ = triangles.shape
+faces = np.array(topograph_connectivity).reshape((-1, 5))  # Get the faces
+quads = faces[:, 1:]  # Skip the first column which indicates the number of vertices (in a triangles only mesh)
+n_quads, _ = quads.shape
 surfaces = []
 vector = []
-for i in range(n_triangles):
-    surface_tag, loop_tag, [line_tag0, line_tag1, line_tag2] = generate_triangle(triangles[i], gmsh_tags_map)
+for i in range(n_quads):
+    surface_tag, loop_tag, [line_tag0, line_tag1, line_tag2, line_tag3] = generate_quad(quads[i], gmsh_tags_map)
     surfaces.append(surface_tag)
     vector.append((2, surface_tag))
 
-gmsh.model.geo.extrude(vector, 0, 0, -20)
-# surface_loop = gmsh.model.geo.addSurfaceLoop(surfaces)
-# volume = gmsh.model.geo.addVolume([surface_loop])
+surface_loop = gmsh.model.geo.addSurfaceLoop(surfaces)
+volume = gmsh.model.geo.addVolume([surface_loop])
 # gmsh.model.geo.addPointOnGeometry()
 
 # gmsh.model.geo.addPhysicalGroup(2, surfaces)
