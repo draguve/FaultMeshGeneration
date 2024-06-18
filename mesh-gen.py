@@ -133,19 +133,28 @@ def generate_quad(point_tags, do_flip=False):
     return surface_tag, loop_tag, (a, b, c, d)
 
 
+def get_volume_tag(ov):
+    for item in ov:
+        if item[0] == 3:
+            return item[1]
+
+
 def main():
+    proj = Proj(proj="utm", zone=10, ellps="WGS84")
+
     filtered_records = read_csv()
     print(filtered_records)
-    to_generate = filtered_records[18:20]
+    to_generate = filtered_records[19:20]
     num_walls = len(to_generate)
     all_lat_longs = []
+    all_sections = []
     for record in to_generate:
         lat_longs = get_points(record)
         all_lat_longs.append(lat_longs)
+        all_sections.append(latlong_to_xy(lat_longs, proj))
     all_long_lats = np.vstack(all_lat_longs)
     bounding_box = generate_extended_bounding_box(all_long_lats, 0.05)
 
-    proj = Proj(proj="utm", zone=10, ellps="WGS84")
     all_xy = latlong_to_xy(all_long_lats, proj)
 
     min_lat, max_lat, min_lon, max_lon = bounding_box
@@ -158,8 +167,8 @@ def main():
     bounding_box_xy = bounding_box_xy - center
     all_xy = all_xy - center
 
-    BOUNDING_BOX_DEPTH = 10 * 1000  # is in meters
-    FAULT_DEPTH = 6 * 1000
+    BOUNDING_BOX_DEPTH = - 10 * 1000  # is in meters
+    FAULT_DEPTH = - 6 * 1000
 
     # print("Original Bounding Box (lat/lon):", bounding_box)
     # print("Converted Bounding Box (x/y):", bounding_box_xy)
@@ -181,9 +190,25 @@ def main():
     bounding_box_point_tags.append(factory.addPoint(bounding_box_xy[0][0], bounding_box_xy[1][1], 0))
 
     top_quad = generate_quad(bounding_box_point_tags)
-    ov2 = gmsh.model.geo.extrude([(2, top_quad[0]),], 0, 0, BOUNDING_BOX_DEPTH)
+    ov2 = gmsh.model.geo.extrude([(2, top_quad[0]), ], 0, 0, BOUNDING_BOX_DEPTH)
+    volume_tag = get_volume_tag(ov2)
+    for section in all_sections:
+        n_points, _ = section.shape
+        top_points = []
+        bottom_points = []
+        section = section - center
+        section_quads = []
+        for i in range(n_points):
+            top_points.append(factory.addPoint(section[i][0], section[i][1], 0))
+            bottom_points.append(factory.addPoint(section[i][0], section[i][1], FAULT_DEPTH))
+        for i in range(n_points - 1):
+            generated_quad = generate_quad([top_points[i], top_points[i + 1], bottom_points[i + 1], bottom_points[i]])
+            section_quads.append(generated_quad)
+            factory.synchronize()
+            mesh.embed(1, [generated_quad[2][0]], 2, top_quad[0])
+            mesh.embed(2, [generated_quad[0]], 3,volume_tag)
 
-    gmsh.option.setNumber('Mesh.MeshSizeMin', 10)
+    gmsh.option.setNumber('Mesh.MeshSizeMin', 0.1)
     gmsh.option.setNumber('Mesh.MeshSizeMax', 1000)
     # Synchronize and generate mesh
     factory.synchronize()
