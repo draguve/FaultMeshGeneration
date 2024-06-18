@@ -16,6 +16,10 @@ import matplotlib.colors as mcolors
 from vtkmodules.vtkFiltersCore import vtkCutter
 from vtkmodules.vtkCommonDataModel import vtkPlane
 import pymeshfix
+import typer
+import os
+from pprint import pprint
+import requests_cache
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -300,8 +304,8 @@ def image_to_points(dep, step=50, scale_factor=1):
     return verts
 
 
-def read_csv():
-    df = pd.read_csv('Calaverasfaultzone.csv', index_col='Name', encoding='cp1252')
+def read_csv(filename):
+    df = pd.read_csv(filename, index_col='Name', encoding='cp1252')
     return list(df.itertuples(index=False, name=None))
 
 
@@ -351,27 +355,48 @@ def apply_centering_points(points, center):
     return points - center
 
 
-def main():
-    filtered_records = read_csv()
-    print(filtered_records)
+def main(
+        input_file: str,
+        fault_output: str = "faults.stl",
+        topography_output: str = "topography.stl",
+        show_before_saving: bool = False,
+        fault_height: int = 10,
+        fault_depth: int = 100,
+        just_check_res: bool = False,
+        topography_resolution: int = 30,
+        verbose: bool = False,
+        surrounding_region: float = 0.01,
+        topography_step: int = 1
+):
+    filtered_records = read_csv(input_file)
     radius = 6371
-    to_generate = filtered_records[18:19]
+    to_generate = filtered_records[:]
     num_walls = len(to_generate)
     all_lat_longs = []
-    # all_vertices = []
-    # all_connectivity = []
+
+    print(f"Generating faults for {len(to_generate)} sections")
+    if verbose:
+        pprint(to_generate)
+
     for record in to_generate:
         lat_longs = get_points(record)
         all_lat_longs.append(lat_longs)
 
     all_long_lats = np.vstack(all_lat_longs)
-    bounding_box = generate_extended_bounding_box(all_long_lats, 0.01)
+    bounding_box = generate_extended_bounding_box(all_long_lats, surrounding_region)
     dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
     dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
-    assert (dem_res["30m"])
-    res = 30
-    dem = py3dep.get_dem(dep3_bounding_box, res)
-    topograph_points = image_to_points(dem, step=1)
+    if just_check_res:
+        print(dem_res)
+        exit()
+
+    if f"{topography_resolution}m" not in dem_res or not dem_res[f"{topography_resolution}m"]:
+        print(dem_res)
+        print(f"Resolution {topography_resolution}m not available")
+        exit()
+
+    dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
+    topograph_points = image_to_points(dem, step=topography_step)
 
     rotational_center = get_center(np.vstack(topograph_points))
     rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
@@ -385,20 +410,23 @@ def main():
 
     all_wall_meshes = pv.MultiBlock()
     for i in range(num_walls):
-        wall_verts, wall_connectivity, = create_wall(all_lat_longs[i], up_diff=20, down_diff=100, R=radius)
+        wall_verts, wall_connectivity, = create_wall(all_lat_longs[i], up_diff=fault_height, down_diff=fault_depth,
+                                                     R=radius)
         wall_verts = apply_rotation_points(wall_verts, rotation_matrix)
         wall_verts = apply_centering_points(wall_verts, center)
         wall_mesh = pv.PolyData(wall_verts, wall_connectivity).triangulate()
         all_wall_meshes.append(wall_mesh)
 
-    plotter = pv.Plotter()
-    plotter.add_mesh(topo_surface, "red", "wireframe")
-    plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
-    plotter.show()
+    if show_before_saving:
+        plotter = pv.Plotter()
+        plotter.add_mesh(topo_surface, "red", "wireframe")
+        plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
+        plotter.show()
 
-    pv.save_meshio("topography.stl", topo_surface)
-    pv.save_meshio("faults.stl", all_wall_meshes.combine())
+    pv.save_meshio(topography_output, topo_surface)
+    pv.save_meshio(fault_output, all_wall_meshes.combine())
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    # main("Calaverasfaultzone.csv", show_before_saving=True)
+    typer.run(main)
