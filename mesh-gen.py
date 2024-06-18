@@ -121,15 +121,15 @@ def read_csv():
     return list(df.itertuples(index=False, name=None))
 
 
-def generate_quad(point_tags, do_flip=False):
-    a = gmsh.model.geo.addLine(point_tags[0], point_tags[1])
-    b = gmsh.model.geo.addLine(point_tags[1], point_tags[2])
-    c = gmsh.model.geo.addLine(point_tags[2], point_tags[3])
-    d = gmsh.model.geo.addLine(point_tags[3], point_tags[0])
-    loop_tag = gmsh.model.geo.addCurveLoop([a, b, c, d])
+def generate_quad(factory, point_tags, do_flip=False):
+    a = factory.addLine(point_tags[0], point_tags[1])
+    b = factory.addLine(point_tags[1], point_tags[2])
+    c = factory.addLine(point_tags[2], point_tags[3])
+    d = factory.addLine(point_tags[3], point_tags[0])
+    loop_tag = factory.addCurveLoop([a, b, c, d])
     if do_flip:
         loop_tag = -loop_tag
-    surface_tag = gmsh.model.geo.addPlaneSurface([loop_tag])
+    surface_tag = factory.addPlaneSurface([loop_tag])
     return surface_tag, loop_tag, (a, b, c, d)
 
 
@@ -153,7 +153,7 @@ def main():
         all_lat_longs.append(lat_longs)
         all_sections.append(latlong_to_xy(lat_longs, proj))
     all_long_lats = np.vstack(all_lat_longs)
-    bounding_box = generate_extended_bounding_box(all_long_lats, 0.05)
+    bounding_box = generate_extended_bounding_box(all_long_lats, 0.2)
 
     all_xy = latlong_to_xy(all_long_lats, proj)
 
@@ -176,7 +176,7 @@ def main():
     # exit()
 
     model = gmsh.model
-    factory = model.geo
+    factory = model.occ
     mesh = model.mesh
 
     bounding_box_point_tags = []
@@ -189,27 +189,34 @@ def main():
     bounding_box_point_tags.append(factory.addPoint(bounding_box_xy[1][0], bounding_box_xy[1][1], 0))
     bounding_box_point_tags.append(factory.addPoint(bounding_box_xy[0][0], bounding_box_xy[1][1], 0))
 
-    top_quad = generate_quad(bounding_box_point_tags)
-    ov2 = gmsh.model.geo.extrude([(2, top_quad[0]), ], 0, 0, BOUNDING_BOX_DEPTH)
+    top_quad = generate_quad(factory, bounding_box_point_tags)
+    ov2 = factory.extrude([(2, top_quad[0]), ], 0, 0, BOUNDING_BOX_DEPTH)
     volume_tag = get_volume_tag(ov2)
     for section in all_sections:
         n_points, _ = section.shape
+        n_points = n_points
         top_points = []
         bottom_points = []
         section = section - center
         section_quads = []
         for i in range(n_points):
-            top_points.append(factory.addPoint(section[i][0], section[i][1], 0))
-            bottom_points.append(factory.addPoint(section[i][0], section[i][1], FAULT_DEPTH))
+            top_points.append(factory.addPoint(section[i][0]*10, section[i][1]*10, 0))
+            bottom_points.append(factory.addPoint(section[i][0]*10, section[i][1]*10, FAULT_DEPTH))
         for i in range(n_points - 1):
-            generated_quad = generate_quad([top_points[i], top_points[i + 1], bottom_points[i + 1], bottom_points[i]])
+            generated_quad = generate_quad(factory,
+                                           [top_points[i], top_points[i + 1], bottom_points[i + 1], bottom_points[i]])
             section_quads.append(generated_quad)
-            factory.synchronize()
-            mesh.embed(1, [generated_quad[2][0]], 2, top_quad[0])
-            mesh.embed(2, [generated_quad[0]], 3,volume_tag)
 
-    gmsh.option.setNumber('Mesh.MeshSizeMin', 0.1)
-    gmsh.option.setNumber('Mesh.MeshSizeMax', 1000)
+        lines = [section[2][0] for section in section_quads]
+        quads = [section[0] for section in section_quads]
+        factory.synchronize()
+        mesh.embed(1, lines, 2, top_quad[0])
+        mesh.embed(2, quads, 3, volume_tag)
+
+    factory.removeAllDuplicates()
+
+    gmsh.option.setNumber('Mesh.MeshSizeMin', 100)
+    gmsh.option.setNumber('Mesh.MeshSizeMax', 3000)
     # Synchronize and generate mesh
     factory.synchronize()
     gmsh.fltk.run()
