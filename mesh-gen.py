@@ -285,7 +285,7 @@ def get_3dep_bbox(min_lat, max_lat, min_lon, max_lon):
 def image_to_points(dep, step=50, scale_factor=1):
     points = []
     index = 0
-    for label, content in dem.to_pandas().items():
+    for label, content in dep.to_pandas().items():
         index = index + 1
         if index % step != 0:
             continue
@@ -351,115 +351,54 @@ def apply_centering_points(points, center):
     return points - center
 
 
-filtered_records = read_csv()
-print(filtered_records)
-radius = 6371
-to_generate = filtered_records[18:19]
-num_walls = len(to_generate)
-all_lat_longs = []
-# all_vertices = []
-# all_connectivity = []
-for record in to_generate:
-    lat_longs = get_points(record)
-    all_lat_longs.append(lat_longs)
-    # new_points, dim = lat_longs.shape
-    # assert (dim == 3)
-    # vertices, connectivity = create_wall(lat_longs, up_diff=20, down_diff=250,
-    #                                      R=radius)
-    # all_vertices.append(vertices)
-    # all_connectivity.append(connectivity)
-all_long_lats = np.vstack(all_lat_longs)
-bounding_box = generate_extended_bounding_box(all_long_lats, 0.01)
-dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
-dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
-assert (dem_res["30m"])
-res = 30
-dem = py3dep.get_dem(dep3_bounding_box, res)
-topograph_points = image_to_points(dem, step=10)
+def main():
+    filtered_records = read_csv()
+    print(filtered_records)
+    radius = 6371
+    to_generate = filtered_records[18:19]
+    num_walls = len(to_generate)
+    all_lat_longs = []
+    # all_vertices = []
+    # all_connectivity = []
+    for record in to_generate:
+        lat_longs = get_points(record)
+        all_lat_longs.append(lat_longs)
 
-rotational_center = get_center(np.vstack(topograph_points))
-rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
+    all_long_lats = np.vstack(all_lat_longs)
+    bounding_box = generate_extended_bounding_box(all_long_lats, 0.01)
+    dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
+    dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
+    assert (dem_res["30m"])
+    res = 30
+    dem = py3dep.get_dem(dep3_bounding_box, res)
+    topograph_points = image_to_points(dem, step=1)
 
-topo_points = pv.PolyData(topograph_points)
-topo_points = apply_rotation(topo_points, rotation_matrix)
-center = get_center(topo_points.points)
-topo_points = apply_centering(topo_points, center)
+    rotational_center = get_center(np.vstack(topograph_points))
+    rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
 
-# for i in range(num_walls):
-#     fault_wall = pv.PolyData(all_vertices[i], all_connectivity[i])  # subtracting the center here center the mesh
-#     fault_wall = apply_rotation(fault_wall, rotation_matrix)
-#     fault_wall = apply_centering(fault_wall, center)
-#     fault_wall = fault_wall.triangulate()
-#     all_fault_walls.append(fault_wall)  # comment this out to view elevation
+    topo_points = pv.PolyData(topograph_points)
+    topo_points = apply_rotation(topo_points, rotation_matrix)
+    center = get_center(topo_points.points)
+    topo_points = apply_centering(topo_points, center)
 
-plane = pv.Plane(
-    center=(topo_points.center[0], topo_points.center[1], -200),  # need to calculate these automatically
-    direction=(0, 0, -1),
-    i_size=2000,
-    j_size=2000,
-)
-topo_surface = topo_points.delaunay_2d()
-extruded_mesh = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
-all_wall_meshes = pv.MultiBlock()
-all_intersection_meshes = pv.MultiBlock()
-all_wall_vertices = []
-for i in range(num_walls):
-    wall_mesh, intersection_mesh = create_wall_with_collision(all_lat_longs[i], center, rotation_matrix, topo_surface,
-                                                              extruded_mesh, 20,
-                                                              250, radius)
-    all_wall_meshes.append(wall_mesh)
-    all_wall_vertices.append(wall_mesh.points)
-    all_intersection_meshes.append(intersection_mesh)
+    topo_surface = topo_points.delaunay_2d()
 
-# reconstruct surface mesh
-extra_surface_points = np.vstack(all_wall_vertices)
-all_surface_points = np.vstack((extruded_mesh.points, extra_surface_points))
-points = pv.wrap(all_surface_points)
-extruded_mesh = points.delaunay_3d(tol=0.000001)
+    all_wall_meshes = pv.MultiBlock()
+    for i in range(num_walls):
+        wall_verts, wall_connectivity, = create_wall(all_lat_longs[i], up_diff=20, down_diff=100, R=radius)
+        wall_verts = apply_rotation_points(wall_verts, rotation_matrix)
+        wall_verts = apply_centering_points(wall_verts, center)
+        wall_mesh = pv.PolyData(wall_verts, wall_connectivity).triangulate()
+        all_wall_meshes.append(wall_mesh)
 
-# merged = all_intersection_meshes.combine().extract_surface().clean()
-# intersection_meshes = extruded_mesh.intersection(all_intersection_meshes, split_first=True, split_second=True)
-# intersection = intersection_meshes[0]
-# earth_surface_with_wall_points = intersection_meshes[1]
-# wall_points_with_surface_points = intersection_meshes[2]
-# mesh1 = earth_surface_with_wall_points.combine().extract_surface().clean()
+    plotter = pv.Plotter()
+    plotter.add_mesh(topo_surface, "red", "wireframe")
+    plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
+    plotter.show()
+
+    pv.save_meshio("topography.stl", topo_surface)
+    pv.save_meshio("faults.stl", all_wall_meshes.combine())
 
 
-plc = extruded_mesh
-walls_only = pv.MultiBlock()
-# plc.append(extruded_mesh)
-for i in range(num_walls):
-    # plc.append(all_wall_meshes[i])
-    plc = plc + all_wall_meshes[i]
-    walls_only.append(all_wall_meshes[i])
-plc = plc.extract_geometry().triangulate()
-walls_only = walls_only.combine().triangulate()
-
-non_manifold = plc.extract_feature_edges(non_manifold_edges=True, boundary_edges=False, feature_edges=False,
-                                         manifold_edges=True, clear_data=True)
-#
-plotter = pv.Plotter()
-# plotter.add_mesh(extruded_mesh, 'yellow', "wireframe")
-# plotter.add_mesh(walls_only, "blue")
-plotter.add_mesh(plc, "black", "wireframe")
-plotter.add_mesh(non_manifold, "red")
-plotter.show()
-
-tet = tetgen.TetGen(plc)
-# tet.make_manifold(True)
-tet.tetrahedralize(order=1, mindihedral=10, minratio=1.1, quality=True)
-grid = tet.grid
-plotter.add_mesh(grid, opacity=0.3, show_edges=True)
-cells = grid.cells.reshape(-1, 5)[:, 1:]
-cell_center = grid.points[cells].mean(1)
-mask = cell_center[:, 2] < -100
-cell_ind = mask.nonzero()[0]
-subgrid = grid.extract_cells(cell_ind)
-
-# advanced plotting
-plotter = pv.Plotter()
-plotter.add_mesh(subgrid, 'lightgrey', lighting=True, show_edges=True)
-plotter.add_mesh(plc, 'r', 'wireframe')
-plotter.add_legend([[' Input Mesh ', 'r'],
-                    [' Tessellated Mesh ', 'black']])
-plotter.show()
+if __name__ == '__main__':
+    main()
