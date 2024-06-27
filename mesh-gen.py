@@ -292,6 +292,23 @@ def apply_centering_points(points, center):
     return points - center
 
 
+def chunk_bounding_box(bounding_box, num_chunks):
+    min_lon, min_lat, max_lon, max_lat = bounding_box
+    lon_step = (max_lon - min_lon) / num_chunks
+    lat_step = (max_lat - min_lat) / num_chunks
+
+    sub_bounding_boxes = []
+    for i in range(num_chunks):
+        for j in range(num_chunks):
+            sub_min_lon = min_lon + i * lon_step
+            sub_min_lat = min_lat + j * lat_step
+            sub_max_lon = sub_min_lon + lon_step
+            sub_max_lat = sub_min_lat + lat_step
+            sub_bounding_boxes.append((sub_min_lon, sub_min_lat, sub_max_lon, sub_max_lat))
+
+    return sub_bounding_boxes
+
+
 def main(
         input_file: str,
         fault_output: str = "faults.stl",
@@ -305,7 +322,8 @@ def main(
         surrounding_region: float = 0.01,
         topography_step: int = 1,
         save: bool = True,
-        fault_resolution:float = 1.0,
+        fault_resolution: float = 1.0,
+        num_chunks_for_topo: int = 1,
 ):
     filtered_records = read_csv(input_file)
     radius = 6371
@@ -334,9 +352,20 @@ def main(
         print(f"Resolution {topography_resolution}m not available")
         exit()
 
-    dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
-    topograph_points = image_to_points(dem, step=topography_step)
+    topograph_points = None
+    if num_chunks_for_topo == 1:
+        dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
+        topograph_points = image_to_points(dem, step=topography_step)
+    else:
+        sub_bounding_boxes = chunk_bounding_box(dep3_bounding_box, num_chunks_for_topo)
+        all_topograph_points = []
+        for sub_box in tqdm(sub_bounding_boxes,"Getting Topography"):
+            dem = py3dep.get_dem(sub_box, topography_resolution)
+            tp = image_to_points(dem, step=topography_step)
+            all_topograph_points.append(tp)
+        topograph_points = np.vstack(all_topograph_points)
 
+    print(f"Num points for topography : {topograph_points.shape}")
     rotational_center = get_center(np.vstack(topograph_points))
     rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
 
@@ -366,5 +395,5 @@ def main(
 
 
 if __name__ == "__main__":
-    # main("Test.csv", show_before_saving=True, save=True)
+    # main("Test.csv", show_before_saving=True, save=False,num_chunks_for_topo=3)
     typer.run(main)
