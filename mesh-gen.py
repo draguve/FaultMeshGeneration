@@ -30,127 +30,64 @@ def project_to_plane(points, plane_normal, plane_point):
     return projection
 
 
-def create_wall(long_lats, up_diff=1, down_diff=1, R=6371):
+def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, R=6371, step_size=1.0):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
     all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
+    all_cartesian_top = apply_rotation_points(all_cartesian_top, rotation_matrix)
+    all_cartesian_top = apply_centering_points(all_cartesian_top, center)
+    all_cartesian_bottom = apply_rotation_points(all_cartesian_bottom, rotation_matrix)
+    all_cartesian_bottom = apply_centering_points(all_cartesian_bottom, center)
     number_of_points, dim = all_cartesian_top.shape
     assert (dim == 3)
-    connectivity = []
+    all_walls = pv.MultiBlock()
     for i in range(number_of_points - 1):
-        current_top = i
-        next_top = i + 1
-        current_bottom = number_of_points + i
-        next_bottom = number_of_points + i + 1
-        connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
-    return np.vstack((all_cartesian_top, all_cartesian_bottom)), connectivity
+        points = np.vstack(
+            (all_cartesian_top[i], all_cartesian_top[i + 1], all_cartesian_bottom[i + 1], all_cartesian_bottom[i]))
+        grid_points = generate_grid(points, step_size)
+        point_cloud = pv.PolyData(grid_points.reshape(-1, 3))
+        all_walls.append(point_cloud)
+    all_walls = all_walls.combine()
+    all_walls = all_walls.delaunay_2d()
+    return all_walls
 
 
-def create_wall_with_collision(long_lats, center, rotation_matrix, surface_mesh, extruded_mesh, up_diff=1, down_diff=1,
-                               R=6371):
-    all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
-    all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
-    number_of_points, dim = all_cartesian_top.shape
-    top_fixed = apply_rotation_points(all_cartesian_top, rotation_matrix)
-    top_fixed = apply_centering_points(top_fixed, center)
-    bottom_fixed = apply_rotation_points(all_cartesian_bottom, rotation_matrix)
-    bottom_fixed = apply_centering_points(bottom_fixed, center)
-    bounded_top = np.zeros(all_cartesian_top.shape)
-    bounded_bottom = np.zeros(all_cartesian_bottom.shape)
-    for i in range(number_of_points):
-        points, ind = extruded_mesh.ray_trace(top_fixed[i], bottom_fixed[i])
-        points2, ind = extruded_mesh.ray_trace(bottom_fixed[i], top_fixed[i])
-        assert points.shape[1] == 3 and points.shape[0] == 1
-        assert points2.shape[1] == 3 and points2.shape[0] == 1
-        bounded_top[i] = points[0]
-        bounded_bottom[i] = points2[0]
-    assert (dim == 3)
-    wall_mesh = pv.MultiBlock()
-    intersection_mesh = pv.MultiBlock()
-    for i in range(number_of_points - 1):
-        current_top = i
-        next_top = i + 1
-        current_bottom = number_of_points + i
-        next_bottom = number_of_points + i + 1
-        quad_points = np.vstack((top_fixed[i:i + 2], bottom_fixed[i:i + 2]))
-        # Create a plane from the quad points
-        # Here we assume the quad points lie on a plane. We calculate the normal and center of the plane
-        quad_center = np.mean(quad_points, axis=0)
-        quad_normal = np.cross(quad_points[1] - quad_points[0], quad_points[2] - quad_points[0])
-        quad_normal = quad_normal / np.linalg.norm(quad_normal)
-        intersecting_with_plane = surface_mesh.slice(quad_normal, quad_center)
-        points_intersecting_with_plane = intersecting_with_plane.points
+def calculate_subdivisions(points, target_resolution=1.0):
+    # Calculate the Euclidean distances between adjacent points
+    d12 = np.linalg.norm(points[1] - points[0])  # Distance P1 to P2
+    d23 = np.linalg.norm(points[2] - points[1])  # Distance P2 to P3
+    d34 = np.linalg.norm(points[3] - points[2])  # Distance P3 to P4
+    d41 = np.linalg.norm(points[0] - points[3])  # Distance P4 to P1
 
-        # Create an orthogonal normal vector (you can choose any vector orthogonal to quad_normal)
-        # For simplicity, let's choose one based on an arbitrary vector, e.g., [1, 0, 0]
-        # Ensure it's not collinear with quad_normal
-        arbitrary_vector = np.array([1, 0, 0])
-        if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
-            arbitrary_vector = np.array([0, 1, 0])
+    # Calculate average lengths of opposite sides
+    avg_u = (d12 + d34) / 2
+    avg_v = (d23 + d41) / 2
 
-        # Ensure it's not collinear with quad_normal
-        if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
-            # If it's collinear, adjust the arbitrary vector
-            arbitrary_vector = np.array([0, 1, 0])
-            if np.allclose(np.dot(quad_normal, arbitrary_vector), 0):
-                # If it's still collinear (unlikely), choose another orthogonal vector
-                arbitrary_vector = np.array([0, 0, 1])
+    # Determine number of subdivisions based on target resolution
+    num_subdivisions_u = int(avg_u / target_resolution)
+    num_subdivisions_v = int(avg_v / target_resolution)
 
-        orthogonal_vector = np.cross(quad_normal, arbitrary_vector)
-        orthogonal_vector = orthogonal_vector / np.linalg.norm(orthogonal_vector)
+    return num_subdivisions_u, num_subdivisions_v
 
-        # Calculate the orthogonal plane center
-        orthogonal_plane_center = quad_center
-        projected_points = project_to_plane(points_intersecting_with_plane, orthogonal_vector, orthogonal_plane_center)
-        projected_top_points = project_to_plane(top_fixed[i:i + 2], orthogonal_vector, orthogonal_plane_center)
 
-        projected_points_polydata = pv.PolyData(projected_points)
-        distance_between_top_point = np.linalg.norm(projected_top_points[1] - projected_top_points[0])
-        distance_from_A = np.linalg.norm(projected_points - projected_top_points[0],
-                                         axis=1) < distance_between_top_point
-        distance_from_B = np.linalg.norm(projected_points - projected_top_points[1],
-                                         axis=1) < distance_between_top_point
+def generate_grid(points, target_resolution=1.0):
+    # Calculate the number of subdivisions
+    num_subdivisions_u, num_subdivisions_v = calculate_subdivisions(points, target_resolution)
 
-        between_top_points = points_intersecting_with_plane[distance_from_A & distance_from_B]
-        wall_vert = np.vstack(
-            (bounded_top[i], between_top_points, bounded_top[i + 1], bounded_bottom[i + 1], bounded_bottom[i]))
-        n, _ = wall_vert.shape
-        wall_connectivity = [n] + list(range(n))
-        wall_mesh.append(pv.PolyData(wall_vert, wall_connectivity))
-        intersection_mesh.append(
-            pv.PolyData(np.vstack((top_fixed[i], top_fixed[i + 1], bottom_fixed[i + 1], bottom_fixed[i])),
-                        [4, 0, 1, 2, 3]))
-        # plotter = pv.Plotter()
-        # plotter.add_mesh(surface_mesh, 'blue', "wireframe")
-        # plotter.add_mesh(pv.PolyData(quad_points, [4, 0, 1, 3, 2]), 'r', 'wireframe')
-        # plotter.add_mesh(pv.PolyData(intersecting_with_plane.points), "green")
-        # plotter.add_mesh(pv.PolyData(np.vstack((bounded_top[i:i + 2], bounded_bottom[i:i + 2]))), "yellow")
-        # plotter.add_mesh(projected_points_polydata, "violet")
-        # plotter.add_mesh(pv.PolyData(wall_vert, wall_connectivity), "orange")
-        # n, dim = between_top_points.shape
-        # if n > 0:
-        #     plotter.add_mesh(pv.PolyData(between_top_points), "black")
-        # plotter.show()
-        # data = is_points_in_quad(quad_points, intersecting_with_surface.points)
-        # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
+    # Create a grid of (u, v) values
+    u = np.linspace(0, 1, num_subdivisions_u + 1)
+    v = np.linspace(0, 1, num_subdivisions_v + 1)
+    U, V = np.meshgrid(u, v)
 
-    return wall_mesh.combine(), intersection_mesh.combine()
+    # Extract the points
+    P1, P2, P3, P4 = points
 
-    # for i in range(number_of_points - 1):
-    #     points = np.vstack((all_cartesian_top[i:i + 2], all_cartesian_bottom[i:i + 2]))
-    #     wall_piece = pv.PolyData(points, [4, 0, 1, 3, 2])
-    #     wall_piece = apply_rotation(wall_piece, rotation_matrix)
-    #     wall_piece = apply_centering(wall_piece, center)
-    #     wall_piece.triangulate().extract_surface().clean()
-    #
-    #     points, ind = extruded_mesh.ray_trace(top_fixed[i], bottom_fixed[i])
-    #     points2, ind = extruded_mesh.ray_trace(bottom_fixed[i], top_fixed[i])
-    #     intersection1 = pv.PolyData(points2)
-    #     intersection2 = pv.PolyData(points)
-    #
-    #
-    #     # fault_wall = fault_wall.triangulate()
-    #     # connectivity.extend([4, current_top, next_top, next_bottom, current_bottom])
-    # return wall
+    # Perform bilinear interpolation using NumPy's broadcasting
+    grid_points = (1 - U)[:, :, np.newaxis] * (1 - V)[:, :, np.newaxis] * P1 + \
+                  U[:, :, np.newaxis] * (1 - V)[:, :, np.newaxis] * P2 + \
+                  (1 - U)[:, :, np.newaxis] * V[:, :, np.newaxis] * P4 + \
+                  U[:, :, np.newaxis] * V[:, :, np.newaxis] * P3
+
+    return grid_points
 
 
 def get_center(vertices):
@@ -366,7 +303,9 @@ def main(
         topography_resolution: int = 30,
         verbose: bool = False,
         surrounding_region: float = 0.01,
-        topography_step: int = 1
+        topography_step: int = 1,
+        save: bool = True,
+        fault_resolution:float = 1.0,
 ):
     filtered_records = read_csv(input_file)
     radius = 6371
@@ -409,13 +348,11 @@ def main(
     topo_surface = topo_points.delaunay_2d()
 
     all_wall_meshes = pv.MultiBlock()
-    for i in range(num_walls):
-        wall_verts, wall_connectivity, = create_wall(all_lat_longs[i], up_diff=fault_height, down_diff=fault_depth,
-                                                     R=radius)
-        wall_verts = apply_rotation_points(wall_verts, rotation_matrix)
-        wall_verts = apply_centering_points(wall_verts, center)
-        wall_mesh = pv.PolyData(wall_verts, wall_connectivity).triangulate()
-        all_wall_meshes.append(wall_mesh)
+    for i in tqdm(range(num_walls), desc="Generating Walls"):
+        wall_multiblock = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
+                                      down_diff=fault_depth,
+                                      R=radius, step_size=fault_resolution)
+        all_wall_meshes.append(wall_multiblock)
 
     if show_before_saving:
         plotter = pv.Plotter()
@@ -423,10 +360,11 @@ def main(
         plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
         plotter.show()
 
-    pv.save_meshio(topography_output, topo_surface)
-    pv.save_meshio(fault_output, all_wall_meshes.combine())
+    if save:
+        pv.save_meshio(topography_output, topo_surface)
+        pv.save_meshio(fault_output, all_wall_meshes.combine())
 
 
 if __name__ == "__main__":
-    # main("Calaverasfaultzone.csv", show_before_saving=True)
+    # main("Test.csv", show_before_saving=True, save=True)
     typer.run(main)
