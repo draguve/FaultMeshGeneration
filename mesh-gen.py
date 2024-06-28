@@ -21,6 +21,8 @@ import os
 from pprint import pprint
 import requests_cache
 from typing_extensions import Annotated
+from scipy.spatial import Delaunay
+from sklearn.decomposition import PCA
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -334,6 +336,10 @@ def main(
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
         fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1000,
         num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
+        use_scipy_delaunay: Annotated[
+            bool, typer.Option(help="Use scipy's delaunay impl, with its PCA impl over VTK's (crashes on bigger point clouds)")] = True,
+        comparison_delaunay: Annotated[
+            bool, typer.Option(help="If using scipy's delaunay impl will show the comparison in the plot")] = False
 ):
     filtered_records = read_csv(input_file)
     to_generate = filtered_records[:]
@@ -376,13 +382,23 @@ def main(
     print(f"Num points for topography : {topograph_points.shape}")
     rotational_center = get_center(np.vstack(topograph_points))
     rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
-
-    topo_points = pv.PolyData(topograph_points)
-    topo_points = apply_rotation(topo_points, rotation_matrix)
-    center = get_center(topo_points.points)
-    topo_points = apply_centering(topo_points, center)
-
-    topo_surface = topo_points.delaunay_2d()
+    topograph_points = apply_rotation_points(topograph_points, rotation_matrix)
+    center = get_center(topograph_points)
+    topograph_points = apply_centering_points(topograph_points, center)
+    if use_scipy_delaunay:
+        # Perform PCA to reduce to 2D
+        pca = PCA(n_components=2)
+        points_2d = pca.fit_transform(topograph_points)
+        dela = Delaunay(points_2d)
+        triangles = dela.simplices
+        num_triangles, _ = triangles.shape
+        connectivity = np.zeros((num_triangles, 1), dtype=int)
+        connectivity[:] = 3
+        connectivity = np.hstack((connectivity, triangles)).flatten()
+        topo_surface = pv.PolyData(topograph_points, connectivity)
+    else:
+        topo_points = pv.PolyData(topograph_points)
+        topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
     print(f"Generating faults for {len(to_generate)} sections")
     all_wall_meshes = pv.MultiBlock()
@@ -395,6 +411,10 @@ def main(
         plotter = pv.Plotter()
         plotter.add_mesh(topo_surface, "red", "wireframe")
         plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
+        if comparison_delaunay and use_scipy_delaunay:
+            topo_points2 = pv.PolyData(topograph_points)
+            topo_surface2 = topo_points2.delaunay_2d(progress_bar=True)
+            plotter.add_mesh(topo_surface2, "green", "wireframe", opacity=0.5)
         plotter.show()
 
     if save:
