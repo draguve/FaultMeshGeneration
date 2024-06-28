@@ -22,6 +22,7 @@ from pprint import pprint
 import requests_cache
 from typing_extensions import Annotated
 
+
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
 # from vtkmodules.numpy_interface import dataset_adapter as dsa
 def project_to_plane(points, plane_normal, plane_point):
@@ -30,9 +31,9 @@ def project_to_plane(points, plane_normal, plane_point):
     return projection
 
 
-def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, R=6371, step_size=1.0):
-    all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], R + up_diff)
-    all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], R - down_diff)
+def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step_size=1.0):
+    all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], up_diff * 1000)
+    all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], -down_diff * 1000)
     all_cartesian_top = apply_rotation_points(all_cartesian_top, rotation_matrix)
     all_cartesian_top = apply_centering_points(all_cartesian_top, center)
     all_cartesian_bottom = apply_rotation_points(all_cartesian_bottom, rotation_matrix)
@@ -106,13 +107,21 @@ def get_points(record):
     return lat_longs
 
 
-def get_cartesian(lat=None, lon=None, R=6371, diff=0):  # in km:
-    # lat, lon = np.deg2rad(lat), np.deg2rad(lon)
-    # R = 6371 # radius of the earth
-    R = R + diff
-    x = R * np.cos(lat) * np.cos(lon)
-    y = R * np.cos(lat) * np.sin(lon)
-    z = R * np.sin(lat)
+def get_cartesian(lat, lon, alt):
+    # see http://www.mathworks.de/help/toolbox/aeroblks/llatoecefposition.html
+
+    rad = np.float64(6378137.0)  # Radius of the Earth (in meters)
+    f = np.float64(1.0 / 298.257223563)  # Flattening factor WGS84 Model
+    cosLat = np.cos(lat)
+    sinLat = np.sin(lat)
+    FF = (1.0 - f) ** 2
+    C = 1 / np.sqrt(cosLat ** 2 + FF * sinLat ** 2)
+    S = C * FF
+
+    x = (rad * C + alt) * cosLat * np.cos(lon)
+    y = (rad * C + alt) * cosLat * np.sin(lon)
+    z = (rad * S + alt) * sinLat
+
     return np.vstack((x, y, z)).T
 
 
@@ -235,7 +244,7 @@ def image_to_points(dep, step=50, scale_factor=1):
         lats = np.array(content.index)
         longs = np.zeros(lats.shape)
         longs[:] = label
-        verts = get_cartesian(lat=lats, lon=longs, R=6371 * scale_factor, diff=(diffs / 1000))  # again this is weird
+        verts = get_cartesian(lat=lats, lon=longs, alt=diffs)  # again this is weird
         points.append(verts[::step])
     verts = np.vstack(points)
     return verts
@@ -316,17 +325,17 @@ def main(
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh")] = False,
         fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 10,
         fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 100,
-        just_check_res: Annotated[bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
+        just_check_res: Annotated[
+            bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
         topography_resolution: Annotated[int, typer.Option(help="Set resolution in m to use")] = 30,
         verbose: Annotated[bool, typer.Option(help="Verbose")] = False,
         surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box")] = 0.01,
         topography_step: Annotated[int, typer.Option(help="Stride for topography")] = 1,
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
-        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1.0,
+        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1000,
         num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
 ):
     filtered_records = read_csv(input_file)
-    radius = 6371
     to_generate = filtered_records[:]
     num_walls = len(to_generate)
     all_lat_longs = []
@@ -358,7 +367,7 @@ def main(
     else:
         sub_bounding_boxes = chunk_bounding_box(dep3_bounding_box, num_chunks_for_topo)
         all_topograph_points = []
-        for sub_box in tqdm(sub_bounding_boxes,"Getting Topography"):
+        for sub_box in tqdm(sub_bounding_boxes, "Getting Topography"):
             dem = py3dep.get_dem(sub_box, topography_resolution)
             tp = image_to_points(dem, step=topography_step)
             all_topograph_points.append(tp)
@@ -379,8 +388,7 @@ def main(
     all_wall_meshes = pv.MultiBlock()
     for i in tqdm(range(num_walls), desc="Generating Walls"):
         wall_multiblock = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
-                                      down_diff=fault_depth,
-                                      R=radius, step_size=fault_resolution)
+                                      down_diff=fault_depth, step_size=fault_resolution)
         all_wall_meshes.append(wall_multiblock)
 
     if plot:
@@ -395,5 +403,5 @@ def main(
 
 
 if __name__ == "__main__":
-    # main("Test.csv", show_before_saving=True, save=False,num_chunks_for_topo=3)
+    # main("Test.csv", plot=True, save=False, num_chunks_for_topo=1,fault_resolution=500)
     typer.run(main)
