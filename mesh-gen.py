@@ -20,7 +20,7 @@ import typer
 import os
 from pprint import pprint
 import requests_cache
-
+from typing_extensions import Annotated
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
 # from vtkmodules.numpy_interface import dataset_adapter as dsa
@@ -310,20 +310,20 @@ def chunk_bounding_box(bounding_box, num_chunks):
 
 
 def main(
-        input_file: str,
-        fault_output: str = "faults.stl",
-        topography_output: str = "topography.stl",
-        show_before_saving: bool = False,
-        fault_height: int = 10,
-        fault_depth: int = 100,
-        just_check_res: bool = False,
-        topography_resolution: int = 30,
-        verbose: bool = False,
-        surrounding_region: float = 0.01,
-        topography_step: int = 1,
-        save: bool = True,
-        fault_resolution: float = 1.0,
-        num_chunks_for_topo: int = 1,
+        input_file: Annotated[str, typer.Argument(help="Path for the input file, containing latitude and longitudes")],
+        fault_output: Annotated[str, typer.Option(help="Fault output filename")] = "faults.stl",
+        topography_output: Annotated[str, typer.Option(help="Topography output filename")] = "topography.stl",
+        plot: Annotated[bool, typer.Option(help="Show fault and topography mesh")] = False,
+        fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 10,
+        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 100,
+        just_check_res: Annotated[bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
+        topography_resolution: Annotated[int, typer.Option(help="Set resolution in m to use")] = 30,
+        verbose: Annotated[bool, typer.Option(help="Verbose")] = False,
+        surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box")] = 0.01,
+        topography_step: Annotated[int, typer.Option(help="Stride for topography")] = 1,
+        save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
+        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1.0,
+        num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
 ):
     filtered_records = read_csv(input_file)
     radius = 6371
@@ -331,7 +331,6 @@ def main(
     num_walls = len(to_generate)
     all_lat_longs = []
 
-    print(f"Generating faults for {len(to_generate)} sections")
     if verbose:
         pprint(to_generate)
 
@@ -376,6 +375,7 @@ def main(
 
     topo_surface = topo_points.delaunay_2d()
 
+    print(f"Generating faults for {len(to_generate)} sections")
     all_wall_meshes = pv.MultiBlock()
     for i in tqdm(range(num_walls), desc="Generating Walls"):
         wall_multiblock = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
@@ -383,7 +383,7 @@ def main(
                                       R=radius, step_size=fault_resolution)
         all_wall_meshes.append(wall_multiblock)
 
-    if show_before_saving:
+    if plot:
         plotter = pv.Plotter()
         plotter.add_mesh(topo_surface, "red", "wireframe")
         plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
