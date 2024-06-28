@@ -387,8 +387,10 @@ def main(
     topograph_points = apply_centering_points(topograph_points, center)
     if use_scipy_delaunay:
         # Perform PCA to reduce to 2D
+        print(f"Finding optimal plane to project to")
         pca = PCA(n_components=2)
         points_2d = pca.fit_transform(topograph_points)
+        print(f"Calculating triangles based on projection")
         dela = Delaunay(points_2d)
         triangles = dela.simplices
         num_triangles, _ = triangles.shape
