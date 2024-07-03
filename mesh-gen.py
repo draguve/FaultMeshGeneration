@@ -381,14 +381,16 @@ def main(
         compare_solver: Annotated[
             bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False,
         fast_path_disabled: Annotated[
-                    bool, typer.Option(help="Disable fast path (uses meshio only)")] = False
+            bool, typer.Option(help="Disable fast path (uses meshio only)")] = False,
+        extrude_surface_to_depth: Annotated[
+            float, typer.Option(help="Extrude topography mesh to depth (in Km)")] = 0.0
 ):
     if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
         print('Cannot use custom solver with "num_chunks_for_topo">1')
         exit()
 
     fast_path = False
-    if not plot and topo_solver == TopographySolver.custom and not fast_path_disabled:
+    if not plot and topo_solver == TopographySolver.custom and extrude_surface_to_depth == 0.0 and not fast_path_disabled:
         print("Using Fast Path")
         fast_path = True
 
@@ -459,6 +461,15 @@ def main(
     else:
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
+
+    if extrude_surface_to_depth != 0.0:
+        plane = pv.Plane(
+            center=(topo_surface.center[0], topo_surface.center[1], -extrude_surface_to_depth*1000),
+            direction=(0, 0, -1),
+            i_size=2000*1000, # code to fix this
+            j_size=2000*1000,
+        )
+        topo_surface = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
 
     print(f"Generating faults for {len(to_generate)} sections")
     all_wall_meshes = pv.MultiBlock()
