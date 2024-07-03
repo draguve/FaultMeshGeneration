@@ -24,6 +24,7 @@ from typing_extensions import Annotated
 from scipy.spatial import Delaunay
 from sklearn.decomposition import PCA
 from enum import Enum
+import meshio
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -57,11 +58,12 @@ def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step
     for i in range(number_of_points - 1):
         points = np.vstack(
             (all_cartesian_top[i], all_cartesian_top[i + 1], all_cartesian_bottom[i + 1], all_cartesian_bottom[i]))
-        grid_points = generate_grid(points, num_steps_in_between[i], num_heights)[:,0:-1,:]
+        grid_points = generate_grid(points, num_steps_in_between[i], num_heights)[:, 0:-1, :]
         all_grids.append(grid_points)
     all_points = np.concatenate(all_grids, axis=1)
     connectivity = generate_grid_connectivity(all_points)
-    return pv.PolyData(all_points.reshape(-1, 3), connectivity)
+    return all_points.reshape(-1, 3), connectivity
+    # return pv.PolyData(all_points.reshape(-1, 3), connectivity)
 
 
 def calculate_subdivisions(points, target_resolution=1.0):
@@ -370,17 +372,25 @@ def main(
         surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box")] = 0.01,
         topography_step: Annotated[int, typer.Option(help="Stride for topography")] = 1,
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
-        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be (in m)")] = 50,
+        fault_resolution: Annotated[
+            float, typer.Option(help="How big should the triangles in the fault be (in m)")] = 50,
         num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
         topo_solver: Annotated[
             TopographySolver, typer.Option(
                 help="What solver to use for point cloud (VTK's crashes on bigger point clouds) (custom does not work with chunked download")] = TopographySolver.custom,
         compare_solver: Annotated[
-            bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False
+            bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False,
+        fast_path_disabled: Annotated[
+                    bool, typer.Option(help="Disable fast path (uses meshio only)")] = False
 ):
     if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
         print('Cannot use custom solver with "num_chunks_for_topo">1')
         exit()
+
+    fast_path = False
+    if not plot and topo_solver == TopographySolver.custom and not fast_path_disabled:
+        print("Using Fast Path")
+        fast_path = True
 
     filtered_records = read_csv(input_file)
     to_generate = filtered_records[:]
@@ -444,17 +454,51 @@ def main(
         connectivity = np.hstack((connectivity, triangles)).flatten()
         topo_surface = pv.PolyData(topograph_points, connectivity)
     elif topo_solver == TopographySolver.custom:
-        topo_surface = pv.PolyData(topograph_points, custom_connectivity)
+        if not fast_path:
+            topo_surface = pv.PolyData(topograph_points, custom_connectivity)
     else:
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
     print(f"Generating faults for {len(to_generate)} sections")
     all_wall_meshes = pv.MultiBlock()
+    # for fast path
+    accumulated_num_points = 0
+    all_wall_points = []
+    all_wall_connectivity = []
     for i in tqdm(range(num_walls), desc="Generating Walls"):
-        wall_multiblock = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
-                                      down_diff=fault_depth, step_size=fault_resolution)
-        all_wall_meshes.append(wall_multiblock)
+        wall_points, wall_connectivity = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
+                                                     down_diff=fault_depth, step_size=fault_resolution)
+        if not fast_path:
+            wall = pv.PolyData(wall_points, wall_connectivity)
+            all_wall_meshes.append(wall)
+        else:
+            all_wall_points.append(wall_points)
+            wall_triangles = wall_connectivity.reshape(-1, 4)[:, 1:]
+            wall_triangles = wall_triangles + accumulated_num_points
+            all_wall_connectivity.append(wall_triangles)
+            accumulated_num_points = accumulated_num_points + wall_points.shape[0]
+
+    if fast_path:
+        print(f"Saving topography : {topography_output}")
+        topo_cells = [
+            ("triangle", custom_connectivity.reshape(-1, 4)[:, 1:]),
+        ]
+        topo_mesh = meshio.Mesh(
+            topograph_points,
+            topo_cells
+        )
+        topo_mesh.write(topography_output)
+        print(f"Saving faults : {fault_output}")
+        fault_cells = [
+            ("triangle", np.vstack(all_wall_connectivity)),
+        ]
+        fault_mesh = meshio.Mesh(
+            np.vstack(all_wall_points),
+            fault_cells
+        )
+        fault_mesh.write(fault_output)
+        exit()
 
     if plot:
         plotter = pv.Plotter()
@@ -469,7 +513,9 @@ def main(
         plotter.show()
 
     if save:
+        print(f"Saving topography : {topography_output}")
         pv.save_meshio(topography_output, topo_surface)
+        print(f"Saving faults : {fault_output}")
         pv.save_meshio(fault_output, all_wall_meshes.combine())
 
 

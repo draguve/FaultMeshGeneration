@@ -107,4 +107,6 @@ fabric.properties
 
 *.csv
 *.stl
+*.kml
+outputs/
 cache/
