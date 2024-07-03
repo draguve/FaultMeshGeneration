@@ -7,6 +7,9 @@ from fastkml import kml
 from shapely import wkt
 import matplotlib.pyplot as plt
 
+QUADRUPLE_SIZE = 4
+
+
 def remove_duplicate_points(data):
     # Initialize an empty list to store unique rows
     unique_data = []
@@ -50,6 +53,47 @@ def read_csv(filename):
     return list(df.itertuples(index=False, name=None))
 
 
+def mirror_point(p1, p2):
+    return 2 * p2 - p1
+
+
+def num_segments(point_chain):
+    return len(point_chain) - (QUADRUPLE_SIZE - 1)
+
+
+def flatten(list_of_lists):
+    return [elem for lst in list_of_lists for elem in lst]
+
+
+def catmull_rom_spline(P0, P1, P2, P3, num_points, alpha=0.5):
+    def tj(ti, pi, pj):
+        xi, yi = pi
+        xj, yj = pj
+        dx, dy = xj - xi, yj - yi
+        l = (dx ** 2 + dy ** 2) ** 0.5
+        return ti + l ** alpha
+
+    t0 = 0.0
+    t1 = tj(t0, P0, P1)
+    t2 = tj(t1, P1, P2)
+    t3 = tj(t2, P2, P3)
+    t = np.linspace(t1, t2, num_points).reshape(num_points, 1)
+
+    A1 = (t1 - t) / (t1 - t0) * P0 + (t - t0) / (t1 - t0) * P1
+    A2 = (t2 - t) / (t2 - t1) * P1 + (t - t1) / (t2 - t1) * P2
+    A3 = (t3 - t) / (t3 - t2) * P2 + (t - t2) / (t3 - t2) * P3
+    B1 = (t2 - t) / (t2 - t0) * A1 + (t - t0) / (t2 - t0) * A2
+    B2 = (t3 - t) / (t3 - t1) * A2 + (t - t1) / (t3 - t1) * A3
+    points = (t2 - t) / (t2 - t1) * B1 + (t - t1) / (t2 - t1) * B2
+    return points
+
+
+def catmull_rom_chain(points, num_points):
+    point_quadruples = ((points[idx + d] for d in range(QUADRUPLE_SIZE)) for idx in range(num_segments(points)))
+    all_splines = (catmull_rom_spline(*pq, num_points) for pq in point_quadruples)
+    return flatten(all_splines)
+
+
 def main():
     input_filename = "output.csv"
     data = read_csv(input_filename)
@@ -87,7 +131,18 @@ def main():
         outputs.append([id, name, "", all_points])
 
     for output in outputs:
-        plt.plot(output[-1][:,0],output[-1][:,1], c="blue")
+        plt.plot(output[-1][:, 0], output[-1][:, 1], c="blue")
+
+        NUM_POINTS = 100
+        chain_points = catmull_rom_chain(output[-1][:, 0:2], NUM_POINTS)
+        assert len(chain_points) == num_segments(output[-1][:, 0:2]) * NUM_POINTS
+        chain_points = np.vstack(chain_points)
+        # output[-1] = chain_points
+
+        plt.plot(chain_points[:, 0], chain_points[:, 1], c="red")
+        point = mirror_point(output[-1][1, 0:2], output[-1][0, 0:2])
+        plt.plot(point[0],point[1],linestyle="none", marker="o",c="green")
+
     plt.show()
 
     # Create a KML document
