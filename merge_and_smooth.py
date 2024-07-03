@@ -7,6 +7,8 @@ from fastkml import kml
 from shapely import wkt
 import matplotlib.pyplot as plt
 import csv
+import typer
+from typing_extensions import Annotated
 
 QUADRUPLE_SIZE = 4
 
@@ -108,8 +110,14 @@ def generate_catmull_rom(points):
     return np.vstack((start_point, end_point)), chain_points
 
 
-def main():
-    input_filename = "output.csv"
+def main(
+        input_filename: Annotated[str, typer.Argument(help="Path for a csv file, containing the input")],
+        csv_output: Annotated[str, typer.Option(help="Output csv")] = "output.csv",
+        disable_csv: Annotated[bool, typer.Option(help="Disable saving the output file")] = False,
+        plot: Annotated[bool, typer.Option(help="Show final fault before saving")] = False,
+        kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
+        disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False
+):
     data = read_csv(input_filename)
     lines = {}
     for row in data:
@@ -142,36 +150,41 @@ def main():
         name = "-".join(gen_name)
         all_points = np.vstack(all_points)
         all_points = remove_duplicate_points(all_points)
-        extended_points, catmull = generate_catmull_rom(all_points)
+        if disable_smoothing:
+            extended_points, catmull = None, all_points
+        else:
+            extended_points, catmull = generate_catmull_rom(all_points)
         outputs.append([id, name, "", all_points, extended_points, catmull])
 
-    for output in outputs:
-        plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-")
-        plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
-        plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
-    plt.show()
+    if plot:
+        for output in outputs:
+            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-")
+            if not disable_smoothing:
+                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
+                plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
+        plt.show()
 
     # Create a KML document
-    k = kml.KML()
-    folder = kml.Folder()
-    k.append(folder)
-    for row in outputs:
-        geometry = wkt.loads(get_multi_line_string(row[-1]))
-        placemark = kml.Placemark(name=row[1])
-        placemark.geometry = geometry
-        folder.append(placemark)
-    kml_output = 'output.kml'
-    with open(kml_output, 'w') as f:
-        f.write(k.to_string(prettyprint=True))
+    if kml_output != "":
+        k = kml.KML()
+        folder = kml.Folder()
+        k.append(folder)
+        for row in outputs:
+            geometry = wkt.loads(get_multi_line_string(row[-1]))
+            placemark = kml.Placemark(name=row[1])
+            placemark.geometry = geometry
+            folder.append(placemark)
+        with open(kml_output, 'w') as f:
+            f.write(k.to_string(prettyprint=True))
 
     # write csv
-    csv_name = "curved_output.csv"
-    with open(csv_name, 'w', newline="") as file:
-        csvwriter = csv.writer(file)
-        csvwriter.writerow(["ID", "Name", "Geom"])
-        for row in outputs:
-            csvwriter.writerow([row[0], row[1], get_multi_line_string(row[-1])])
+    if not disable_csv:
+        with open(csv_output, 'w', newline="") as file:
+            csvwriter = csv.writer(file)
+            csvwriter.writerow(["ID", "Name", "Geom"])
+            for row in outputs:
+                csvwriter.writerow([row[0], row[1], get_multi_line_string(row[-1])])
 
 
 if __name__ == '__main__':
-    main()
+    typer.run(main)
