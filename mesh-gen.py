@@ -23,6 +23,7 @@ import requests_cache
 from typing_extensions import Annotated
 from scipy.spatial import Delaunay
 from sklearn.decomposition import PCA
+from enum import Enum
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -43,14 +44,16 @@ def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step
     number_of_points, dim = all_cartesian_top.shape
     assert (dim == 3)
     all_walls = pv.MultiBlock()
+    all_grids = []
     for i in range(number_of_points - 1):
         points = np.vstack(
             (all_cartesian_top[i], all_cartesian_top[i + 1], all_cartesian_bottom[i + 1], all_cartesian_bottom[i]))
         grid_points = generate_grid(points, step_size)
+        all_grids.append(grid_points)
         point_cloud = pv.PolyData(grid_points.reshape(-1, 3))
         all_walls.append(point_cloud)
     all_walls = all_walls.combine()
-    all_walls = all_walls.delaunay_2d()
+    all_walls = all_walls.delaunay_2d(progress_bar=True)
     return all_walls
 
 
@@ -234,7 +237,7 @@ def get_3dep_bbox(min_lat, max_lat, min_lon, max_lon):
     return min_lon, min_lat, max_lon, max_lat
 
 
-def image_to_points(dep, step=50, scale_factor=1):
+def image_to_points(dep, step=50, custom_connectivity=False):
     points = []
     index = 0
     for label, content in dep.to_pandas().items():
@@ -249,8 +252,24 @@ def image_to_points(dep, step=50, scale_factor=1):
         longs[:] = label
         verts = get_cartesian(lat=lats, lon=longs, alt=diffs)  # again this is weird
         points.append(verts[::step])
-    verts = np.vstack(points)
-    return verts
+    verts = np.stack(points)
+
+    if custom_connectivity:
+        # generate topo
+        num_points = verts.shape[0] * verts.shape[1]
+        indices = np.array(range(num_points))
+        indices = indices.reshape(verts.shape[0], verts.shape[1])
+        first = indices[0:-1, 0:-1].reshape(-1)
+        second = indices[1:, 0:-1].reshape(-1)
+        third = indices[0:-1, 1:].reshape(-1)
+        forth = indices[1:, 1:].reshape(-1)
+        dimensions = np.full(((verts.shape[0] - 1) * (verts.shape[1] - 1)), 3, dtype=int)
+        first_triangles = np.stack((dimensions, first, second, third)).T
+        second_triangles = np.stack((dimensions, second, forth, third)).T
+        # verts.reshape(-1, 3)
+        connectivity = np.vstack((first_triangles, second_triangles)).flatten()
+        return verts.reshape(-1, 3), connectivity
+    return verts.reshape(-1, 3), None
 
 
 def read_csv(filename):
@@ -321,6 +340,12 @@ def chunk_bounding_box(bounding_box, num_chunks):
     return sub_bounding_boxes
 
 
+class TopographySolver(str, Enum):
+    vtk = "vtk"
+    scipy = "scipy"
+    custom = "custom"
+
+
 def main(
         input_file: Annotated[str, typer.Argument(help="Path for the input file, containing latitude and longitudes")],
         fault_output: Annotated[str, typer.Option(help="Fault output filename")] = "faults.stl",
@@ -337,11 +362,16 @@ def main(
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
         fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1000,
         num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
-        use_scipy_delaunay: Annotated[
-            bool, typer.Option(help="Use scipy's delaunay impl, with its PCA impl over VTK's (crashes on bigger point clouds)")] = True,
-        comparison_delaunay: Annotated[
-            bool, typer.Option(help="If using scipy's delaunay impl will show the comparison in the plot")] = False
+        topo_solver: Annotated[
+            TopographySolver, typer.Option(
+                help="What solver to use for point cloud (VTK's crashes on bigger point clouds) (custom does not work with chunked download")] = TopographySolver.custom,
+        compare_solver: Annotated[
+            bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False
 ):
+    if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
+        print('Cannot use custom solver with "num_chunks_for_topo">1')
+        exit()
+
     filtered_records = read_csv(input_file)
     to_generate = filtered_records[:]
     num_walls = len(to_generate)
@@ -368,15 +398,18 @@ def main(
         exit()
 
     topograph_points = None
+    custom_connectivity = None
     if num_chunks_for_topo == 1:
+        print("Downloading topography")
         dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
-        topograph_points = image_to_points(dem, step=topography_step)
+        topograph_points, custom_connectivity = image_to_points(dem, step=topography_step,
+                                                                custom_connectivity=topo_solver == TopographySolver.custom)
     else:
         sub_bounding_boxes = chunk_bounding_box(dep3_bounding_box, num_chunks_for_topo)
         all_topograph_points = []
         for sub_box in tqdm(sub_bounding_boxes, "Getting Topography"):
             dem = py3dep.get_dem(sub_box, topography_resolution)
-            tp = image_to_points(dem, step=topography_step)
+            tp, _ = image_to_points(dem, step=topography_step)
             all_topograph_points.append(tp)
         topograph_points = np.vstack(all_topograph_points)
 
@@ -386,7 +419,8 @@ def main(
     topograph_points = apply_rotation_points(topograph_points, rotation_matrix)
     center = get_center(topograph_points)
     topograph_points = apply_centering_points(topograph_points, center)
-    if use_scipy_delaunay:
+
+    if topo_solver == TopographySolver.scipy:
         # Perform PCA to reduce to 2D
         print(f"Finding optimal plane to project to")
         pca = PCA(n_components=2)
@@ -399,6 +433,8 @@ def main(
         connectivity[:] = 3
         connectivity = np.hstack((connectivity, triangles)).flatten()
         topo_surface = pv.PolyData(topograph_points, connectivity)
+    elif topo_solver == TopographySolver.custom:
+        topo_surface = pv.PolyData(topograph_points, custom_connectivity)
     else:
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
@@ -414,10 +450,12 @@ def main(
         plotter = pv.Plotter()
         plotter.add_mesh(topo_surface, "red", "wireframe")
         plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
-        if comparison_delaunay and use_scipy_delaunay:
+        if compare_solver and topo_solver != TopographySolver.vtk:
             topo_points2 = pv.PolyData(topograph_points)
             topo_surface2 = topo_points2.delaunay_2d(progress_bar=True)
             plotter.add_mesh(topo_surface2, "green", "wireframe", opacity=0.5)
+        elif compare_solver:
+            print("Cannot compare vtk")
         plotter.show()
 
     if save:
@@ -426,5 +464,5 @@ def main(
 
 
 if __name__ == "__main__":
-    # main("curved_output.csv", plot=True, save=False, num_chunks_for_topo=4,fault_resolution=500)
+    # main("curved_output.csv", plot=True, save=False, num_chunks_for_topo=1,fault_resolution=500)
     typer.run(main)
