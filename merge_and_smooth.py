@@ -94,6 +94,19 @@ def catmull_rom_chain(points, num_points):
     return flatten(all_splines)
 
 
+def generate_catmull_rom(points):
+    start_point = mirror_point(points[1], points[0])
+    end_point = mirror_point(points[-2], points[-1])
+    extended_points = np.vstack((start_point, points, end_point))
+    NUM_POINTS = 100
+    chain_points = catmull_rom_chain(extended_points[:, 0:2], NUM_POINTS)
+    assert len(chain_points) == num_segments(extended_points[:, 0:2]) * NUM_POINTS
+    chain_points = np.vstack(chain_points)
+    z = np.zeros((len(chain_points), 1), dtype=chain_points.dtype)
+    chain_points = np.hstack((chain_points, z))
+    return np.vstack((start_point, end_point)), chain_points
+
+
 def main():
     input_filename = "output.csv"
     data = read_csv(input_filename)
@@ -128,20 +141,13 @@ def main():
         name = "-".join(gen_name)
         all_points = np.vstack(all_points)
         all_points = remove_duplicate_points(all_points)
-        outputs.append([id, name, "", all_points])
+        extended_points, catmull = generate_catmull_rom(all_points)
+        outputs.append([id, name, "", all_points, extended_points, catmull])
 
     for output in outputs:
-        plt.plot(output[-1][:, 0], output[-1][:, 1], c="blue")
-
-        NUM_POINTS = 100
-        chain_points = catmull_rom_chain(output[-1][:, 0:2], NUM_POINTS)
-        assert len(chain_points) == num_segments(output[-1][:, 0:2]) * NUM_POINTS
-        chain_points = np.vstack(chain_points)
-        # output[-1] = chain_points
-
-        plt.plot(chain_points[:, 0], chain_points[:, 1], c="red")
-        point = mirror_point(output[-1][1, 0:2], output[-1][0, 0:2])
-        plt.plot(point[0],point[1],linestyle="none", marker="o",c="green")
+        plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-")
+        plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
+        plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
 
     plt.show()
 
