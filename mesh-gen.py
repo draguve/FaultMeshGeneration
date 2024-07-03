@@ -243,6 +243,7 @@ def image_to_points(dep, step=50, scale_factor=1):
             continue
         long = label
         diffs = content.to_numpy()
+        diffs = np.nan_to_num(diffs, nan=0.0, posinf=None, neginf=None)
         lats = np.array(content.index)
         longs = np.zeros(lats.shape)
         longs[:] = label
@@ -380,7 +381,7 @@ def main(
         topograph_points = np.vstack(all_topograph_points)
 
     print(f"Num points for topography : {topograph_points.shape}")
-    rotational_center = get_center(np.vstack(topograph_points))
+    rotational_center = get_center(topograph_points)
     rotation_matrix = get_rotation_matrix_from_direction(rotational_center)
     topograph_points = apply_rotation_points(topograph_points, rotation_matrix)
     center = get_center(topograph_points)
@@ -425,5 +426,5 @@ def main(
 
 
 if __name__ == "__main__":
-    # main("Test.csv", plot=True, save=False, num_chunks_for_topo=1,fault_resolution=500)
+    # main("curved_output.csv", plot=True, save=False, num_chunks_for_topo=4,fault_resolution=500)
     typer.run(main)

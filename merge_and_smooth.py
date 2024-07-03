@@ -6,6 +6,7 @@ import numpy as np
 from fastkml import kml
 from shapely import wkt
 import matplotlib.pyplot as plt
+import csv
 
 QUADRUPLE_SIZE = 4
 
@@ -148,12 +149,10 @@ def main():
         plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-")
         plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
         plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
-
     plt.show()
 
     # Create a KML document
     k = kml.KML()
-    # Create a KML folder
     folder = kml.Folder()
     k.append(folder)
     for row in outputs:
@@ -164,6 +163,14 @@ def main():
     kml_output = 'output.kml'
     with open(kml_output, 'w') as f:
         f.write(k.to_string(prettyprint=True))
+
+    # write csv
+    csv_name = "curved_output.csv"
+    with open(csv_name, 'w', newline="") as file:
+        csvwriter = csv.writer(file)
+        csvwriter.writerow(["ID", "Name", "Geom"])
+        for row in outputs:
+            csvwriter.writerow([row[0], row[1], get_multi_line_string(row[-1])])
 
 
 if __name__ == '__main__':
