@@ -34,7 +34,7 @@ def project_to_plane(points, plane_normal, plane_point):
     return projection
 
 
-def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step_size=1.0):
+def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step_size=1000.0):
     all_cartesian_top = get_cartesian(long_lats[:, 1], long_lats[:, 0], up_diff * 1000)
     all_cartesian_bottom = get_cartesian(long_lats[:, 1], long_lats[:, 0], -down_diff * 1000)
     all_cartesian_top = apply_rotation_points(all_cartesian_top, rotation_matrix)
@@ -42,19 +42,26 @@ def create_wall(long_lats, rotation_matrix, center, up_diff=1, down_diff=1, step
     all_cartesian_bottom = apply_rotation_points(all_cartesian_bottom, rotation_matrix)
     all_cartesian_bottom = apply_centering_points(all_cartesian_bottom, center)
     number_of_points, dim = all_cartesian_top.shape
+
+    # height subdivisions
+    np.max(np.linalg.norm(all_cartesian_top - all_cartesian_bottom, axis=1, keepdims=True)) / step_size
+    num_heights = int(
+        np.ceil(np.max(np.linalg.norm(all_cartesian_top - all_cartesian_bottom, axis=1, keepdims=True)) / step_size))
+    num_steps_in_between = np.ceil(
+        np.linalg.norm(all_cartesian_top[0:-1] - all_cartesian_top[1:], axis=1, keepdims=True) / step_size).astype(int)
+    num_steps_in_between = np.squeeze(num_steps_in_between)
+
     assert (dim == 3)
-    all_walls = pv.MultiBlock()
+    # all_walls = pv.MultiBlock()
     all_grids = []
     for i in range(number_of_points - 1):
         points = np.vstack(
             (all_cartesian_top[i], all_cartesian_top[i + 1], all_cartesian_bottom[i + 1], all_cartesian_bottom[i]))
-        grid_points = generate_grid(points, step_size)
+        grid_points = generate_grid(points, num_steps_in_between[i], num_heights)[:,0:-1,:]
         all_grids.append(grid_points)
-        point_cloud = pv.PolyData(grid_points.reshape(-1, 3))
-        all_walls.append(point_cloud)
-    all_walls = all_walls.combine()
-    all_walls = all_walls.delaunay_2d(progress_bar=True)
-    return all_walls
+    all_points = np.concatenate(all_grids, axis=1)
+    connectivity = generate_grid_connectivity(all_points)
+    return pv.PolyData(all_points.reshape(-1, 3), connectivity)
 
 
 def calculate_subdivisions(points, target_resolution=1.0):
@@ -75,10 +82,7 @@ def calculate_subdivisions(points, target_resolution=1.0):
     return num_subdivisions_u, num_subdivisions_v
 
 
-def generate_grid(points, target_resolution=1.0):
-    # Calculate the number of subdivisions
-    num_subdivisions_u, num_subdivisions_v = calculate_subdivisions(points, target_resolution)
-
+def generate_grid(points, num_subdivisions_u, num_subdivisions_v):
     # Create a grid of (u, v) values
     u = np.linspace(0, 1, num_subdivisions_u + 1)
     v = np.linspace(0, 1, num_subdivisions_v + 1)
@@ -112,10 +116,13 @@ def get_points(record):
     return lat_longs
 
 
-def get_cartesian(lat, lon, alt):
+def get_cartesian(lat_deg, lon_deg, alt):
     # see http://www.mathworks.de/help/toolbox/aeroblks/llatoecefposition.html
 
-    rad = np.float64(6378137.0)  # Radius of the Earth (in meters)
+    lat = np.radians(lat_deg)
+    lon = np.radians(lon_deg)
+    rad = np.float64(6378137.0)
+    # Radius of the Earth (in meters)
     f = np.float64(1.0 / 298.257223563)  # Flattening factor WGS84 Model
     cosLat = np.cos(lat)
     sinLat = np.sin(lat)
@@ -237,6 +244,21 @@ def get_3dep_bbox(min_lat, max_lat, min_lon, max_lon):
     return min_lon, min_lat, max_lon, max_lat
 
 
+def generate_grid_connectivity(verts):
+    num_points = verts.shape[0] * verts.shape[1]
+    indices = np.array(range(num_points))
+    indices = indices.reshape(verts.shape[0], verts.shape[1])
+    first = indices[0:-1, 0:-1].reshape(-1)
+    second = indices[1:, 0:-1].reshape(-1)
+    third = indices[0:-1, 1:].reshape(-1)
+    forth = indices[1:, 1:].reshape(-1)
+    dimensions = np.full(((verts.shape[0] - 1) * (verts.shape[1] - 1)), 3, dtype=int)
+    first_triangles = np.stack((dimensions, first, second, third)).T
+    second_triangles = np.stack((dimensions, second, forth, third)).T
+    # verts.reshape(-1, 3)
+    return np.vstack((first_triangles, second_triangles)).flatten()
+
+
 def image_to_points(dep, step=50, custom_connectivity=False):
     points = []
     index = 0
@@ -250,24 +272,12 @@ def image_to_points(dep, step=50, custom_connectivity=False):
         lats = np.array(content.index)
         longs = np.zeros(lats.shape)
         longs[:] = label
-        verts = get_cartesian(lat=lats, lon=longs, alt=diffs)  # again this is weird
+        verts = get_cartesian(lat_deg=lats, lon_deg=longs, alt=diffs)  # again this is weird
         points.append(verts[::step])
     verts = np.stack(points)
 
     if custom_connectivity:
-        # generate topo
-        num_points = verts.shape[0] * verts.shape[1]
-        indices = np.array(range(num_points))
-        indices = indices.reshape(verts.shape[0], verts.shape[1])
-        first = indices[0:-1, 0:-1].reshape(-1)
-        second = indices[1:, 0:-1].reshape(-1)
-        third = indices[0:-1, 1:].reshape(-1)
-        forth = indices[1:, 1:].reshape(-1)
-        dimensions = np.full(((verts.shape[0] - 1) * (verts.shape[1] - 1)), 3, dtype=int)
-        first_triangles = np.stack((dimensions, first, second, third)).T
-        second_triangles = np.stack((dimensions, second, forth, third)).T
-        # verts.reshape(-1, 3)
-        connectivity = np.vstack((first_triangles, second_triangles)).flatten()
+        connectivity = generate_grid_connectivity(verts)
         return verts.reshape(-1, 3), connectivity
     return verts.reshape(-1, 3), None
 
@@ -351,8 +361,8 @@ def main(
         fault_output: Annotated[str, typer.Option(help="Fault output filename")] = "faults.stl",
         topography_output: Annotated[str, typer.Option(help="Topography output filename")] = "topography.stl",
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh")] = False,
-        fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 10,
-        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 100,
+        fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 2,
+        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 10,
         just_check_res: Annotated[
             bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
         topography_resolution: Annotated[int, typer.Option(help="Set resolution in m to use")] = 30,
@@ -360,7 +370,7 @@ def main(
         surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box")] = 0.01,
         topography_step: Annotated[int, typer.Option(help="Stride for topography")] = 1,
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
-        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be")] = 1000,
+        fault_resolution: Annotated[float, typer.Option(help="How big should the triangles in the fault be (in m)")] = 50,
         num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
         topo_solver: Annotated[
             TopographySolver, typer.Option(
