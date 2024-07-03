@@ -5,6 +5,22 @@ import math
 import numpy as np
 from fastkml import kml
 from shapely import wkt
+import matplotlib.pyplot as plt
+
+def remove_duplicate_points(data):
+    # Initialize an empty list to store unique rows
+    unique_data = []
+
+    # Iterate through each row in the original data
+    for row in data:
+        # Check if the row is already in unique_data
+        if row.tolist() not in unique_data:
+            # If not, add it to unique_data
+            unique_data.append(row.tolist())
+
+    # Convert unique_data back to a NumPy array
+    unique_data = np.array(unique_data)
+    return unique_data
 
 
 def get_points(multi_line_string):
@@ -67,7 +83,12 @@ def main():
         id = '-'.join([str(id) for id in gen_id])
         name = "-".join(gen_name)
         all_points = np.vstack(all_points)
+        all_points = remove_duplicate_points(all_points)
         outputs.append([id, name, "", all_points])
+
+    for output in outputs:
+        plt.plot(output[-1][:,0],output[-1][:,1], c="blue")
+    plt.show()
 
     # Create a KML document
     k = kml.KML()
