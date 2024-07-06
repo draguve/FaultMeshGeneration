@@ -250,11 +250,15 @@ def generate_grid_connectivity(verts):
     num_points = verts.shape[0] * verts.shape[1]
     indices = np.array(range(num_points))
     indices = indices.reshape(verts.shape[0], verts.shape[1])
+    return generate_connectivity_from_grid_indices(indices)
+
+
+def generate_connectivity_from_grid_indices(indices):
     first = indices[0:-1, 0:-1].reshape(-1)
     second = indices[1:, 0:-1].reshape(-1)
     third = indices[0:-1, 1:].reshape(-1)
     forth = indices[1:, 1:].reshape(-1)
-    dimensions = np.full(((verts.shape[0] - 1) * (verts.shape[1] - 1)), 3, dtype=int)
+    dimensions = np.full(((indices.shape[0] - 1) * (indices.shape[1] - 1)), 3, dtype=int)
     first_triangles = np.stack((dimensions, first, second, third)).T
     second_triangles = np.stack((dimensions, second, forth, third)).T
     # verts.reshape(-1, 3)
@@ -280,8 +284,66 @@ def image_to_points(dep, step=50, custom_connectivity=False):
 
     if custom_connectivity:
         connectivity = generate_grid_connectivity(verts)
-        return verts.reshape(-1, 3), connectivity
-    return verts.reshape(-1, 3), None
+        return verts, connectivity
+    return verts, None
+
+
+def get_edges(topograph_grid_points):
+    sizes = topograph_grid_points.shape
+    size_x = sizes[0]
+    size_y = sizes[1]
+    top_sides = np.concatenate((topograph_grid_points[:, 0], topograph_grid_points[size_x - 1, :],
+                                topograph_grid_points[:, size_y - 1], topograph_grid_points[0, :]))
+    return top_sides
+
+
+def generate_extrusion(dep, step, extrude_surface_to_depth, rotation_matrix, center, topograph_grid_points,
+                       top_topo_connectivity, step_size):
+    points = []
+    index = 0
+    for label, content in dep.to_pandas().items():
+        index = index + 1
+        if index % step != 0:
+            continue
+        lats = np.array(content.index)
+        longs = np.zeros(lats.shape)
+        longs[:] = label
+        verts = get_cartesian(lat_deg=lats, lon_deg=longs, alt=-extrude_surface_to_depth * 1000)
+        points.append(verts[::step])
+    bottom_grid_points = np.stack(points)
+    bottom_grid_points = apply_rotation_points(bottom_grid_points, rotation_matrix)
+    bottom_grid_points = apply_centering_points(bottom_grid_points, center)
+    topograph_grid_points = apply_rotation_points(topograph_grid_points, rotation_matrix)
+    topograph_grid_points = apply_centering_points(topograph_grid_points, center)
+
+    top_topo_num_points = topograph_grid_points.shape[0] * topograph_grid_points.shape[1]
+    top_topo_indices = np.array(range(top_topo_num_points))
+    top_topo_indices = top_topo_indices.reshape(topograph_grid_points.shape[0], topograph_grid_points.shape[1])
+
+    bottom_topo_num_points = bottom_grid_points.shape[0] * bottom_grid_points.shape[1]
+    bottom_topo_indices = top_topo_num_points + np.array(range(bottom_topo_num_points))
+    bottom_topo_indices = bottom_topo_indices.reshape(bottom_grid_points.shape[0], bottom_grid_points.shape[1])
+    bottom_topo_connectivity = generate_connectivity_from_grid_indices(bottom_topo_indices)
+
+    top_sides = get_edges(topograph_grid_points)
+    bottom_sides = get_edges(bottom_grid_points)
+    num_heights = int(
+        np.ceil(np.max(np.linalg.norm(top_sides - bottom_sides, axis=1, keepdims=True)) / step_size))
+    u = np.linspace(0, 1, num_heights + 1)[1:-1]  # remove top and bottom
+    side_points = (1 - u[:, np.newaxis, np.newaxis]) * top_sides + u[:, np.newaxis, np.newaxis] * bottom_sides
+    side_num_points = side_points.shape[0] * side_points.shape[1]
+    side_indices = top_topo_num_points + bottom_topo_num_points + np.array(range(side_num_points))
+    side_indices = side_indices.reshape(side_points.shape[0], side_points.shape[1])
+
+    top_sides_indices = get_edges(top_topo_indices)
+    bottom_sides_indices = get_edges(bottom_topo_indices)
+    side_all_indices = np.vstack((top_sides_indices, side_indices, bottom_sides_indices))
+    side_all_indices = np.hstack((side_all_indices, side_all_indices[:, 0, np.newaxis]))
+    side_connectivity = generate_connectivity_from_grid_indices(side_all_indices)
+
+    return np.vstack((topograph_grid_points.reshape(-1, 3), bottom_grid_points.reshape(-1, 3),
+                      side_points.reshape(-1, 3))), np.concatenate(
+        (top_topo_connectivity, bottom_topo_connectivity, side_connectivity))
 
 
 def read_csv(filename):
@@ -358,6 +420,11 @@ class TopographySolver(str, Enum):
     custom = "custom"
 
 
+class ExtrusionSolver(str, Enum):
+    custom = "custom"
+    pyvista = "pyvista"
+
+
 def main(
         input_file: Annotated[str, typer.Argument(help="Path for the input file, containing latitude and longitudes")],
         fault_output: Annotated[str, typer.Option(help="Fault output filename")] = "faults.stl",
@@ -382,11 +449,18 @@ def main(
             bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False,
         fast_path_disabled: Annotated[
             bool, typer.Option(help="Disable fast path (uses meshio only)")] = False,
+        extrusion_solver: Annotated[
+            ExtrusionSolver, typer.Option(
+                help="What solver to use for to extrude")] = ExtrusionSolver.custom,
         extrude_surface_to_depth: Annotated[
             float, typer.Option(help="Extrude topography mesh to depth (in Km)")] = 0.0
 ):
     if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
         print('Cannot use custom solver with "num_chunks_for_topo">1')
+        exit()
+
+    if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
+        print('Cannot use custom extrusion solver without custom topo solver')
         exit()
 
     fast_path = False
@@ -424,15 +498,16 @@ def main(
     if num_chunks_for_topo == 1:
         print("Downloading topography")
         dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
-        topograph_points, custom_connectivity = image_to_points(dem, step=topography_step,
-                                                                custom_connectivity=topo_solver == TopographySolver.custom)
+        topograph_grid_points, custom_connectivity = image_to_points(dem, step=topography_step,
+                                                                     custom_connectivity=topo_solver == TopographySolver.custom)
+        topograph_points = topograph_grid_points.reshape(-1, 3)
     else:
         sub_bounding_boxes = chunk_bounding_box(dep3_bounding_box, num_chunks_for_topo)
         all_topograph_points = []
         for sub_box in tqdm(sub_bounding_boxes, "Getting Topography"):
             dem = py3dep.get_dem(sub_box, topography_resolution)
             tp, _ = image_to_points(dem, step=topography_step)
-            all_topograph_points.append(tp)
+            all_topograph_points.append(tp.reshape(-1, 3))
         topograph_points = np.vstack(all_topograph_points)
 
     print(f"Num points for topography : {topograph_points.shape}")
@@ -463,13 +538,23 @@ def main(
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
     if extrude_surface_to_depth != 0.0:
-        plane = pv.Plane(
-            center=(topo_surface.center[0], topo_surface.center[1], -extrude_surface_to_depth*1000),
-            direction=(0, 0, -1),
-            i_size=2000*1000, # code to fix this
-            j_size=2000*1000,
-        )
-        topo_surface = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
+        if extrusion_solver == ExtrusionSolver.pyvista:
+            plane = pv.Plane(
+                center=(topo_surface.center[0], topo_surface.center[1], -extrude_surface_to_depth * 1000),
+                direction=(0, 0, -1),
+                i_size=2000 * 1000,  # code to fix this
+                j_size=2000 * 1000,
+            )
+            topo_surface = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
+        elif extrusion_solver == ExtrusionSolver.custom:
+            if topo_solver == TopographySolver.custom:
+                topograph_points, custom_connectivity = generate_extrusion(dem, topography_step,
+                                                                           extrude_surface_to_depth, rotation_matrix,
+                                                                           center,
+                                                                           topograph_grid_points, custom_connectivity,
+                                                                           1000)  # fault res here for now
+                if not fast_path:
+                    topo_surface = pv.PolyData(topograph_points, custom_connectivity)
 
     print(f"Generating faults for {len(to_generate)} sections")
     all_wall_meshes = pv.MultiBlock()
