@@ -465,9 +465,13 @@ def main(
         exit()
 
     fast_path = False
-    if not plot and topo_solver == TopographySolver.custom and extrude_surface_to_depth == 0.0 and not fast_path_disabled:
-        print("Using Fast Path")
-        fast_path = True
+    if not plot and topo_solver == TopographySolver.custom and not fast_path_disabled:
+        if extrude_surface_to_depth > 0.0 and extrusion_solver == ExtrusionSolver.custom:
+            print("Using Fast Path")
+            fast_path = True
+        if extrude_surface_to_depth == 0.0:
+            print("Using Fast Path")
+            fast_path = True
 
     filtered_records = read_csv(input_file)
     to_generate = filtered_records[:]
