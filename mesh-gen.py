@@ -292,8 +292,9 @@ def get_edges(topograph_grid_points):
     sizes = topograph_grid_points.shape
     size_x = sizes[0]
     size_y = sizes[1]
-    top_sides = np.concatenate((topograph_grid_points[:, 0], topograph_grid_points[size_x - 1, :],
-                                topograph_grid_points[:, size_y - 1], topograph_grid_points[0, :]))
+    top_sides = np.concatenate((topograph_grid_points[0, :], topograph_grid_points[1:, size_y - 1],
+                                np.flip(topograph_grid_points[size_x - 1, :], axis=0)[1:],
+                                np.flip(topograph_grid_points[:, 0], axis=0)[1:]))
     return top_sides
 
 
@@ -431,7 +432,7 @@ def main(
         topography_output: Annotated[str, typer.Option(help="Topography output filename")] = "topography.stl",
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh")] = False,
         fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 2,
-        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 10,
+        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 4,
         just_check_res: Annotated[
             bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
         topography_resolution: Annotated[int, typer.Option(help="Set resolution in m to use")] = 30,
