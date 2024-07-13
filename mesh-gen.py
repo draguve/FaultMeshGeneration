@@ -25,6 +25,7 @@ from scipy.spatial import Delaunay
 from sklearn.decomposition import PCA
 from enum import Enum
 import meshio
+import gmsh
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -265,6 +266,23 @@ def generate_connectivity_from_grid_indices(indices):
     return np.vstack((first_triangles, second_triangles)).flatten()
 
 
+def generate_image_from_dem(dem):
+    all_heights = []
+    all_lats = []
+    all_longs = []
+    for label, content in dem.to_pandas().items():
+        long = label
+        diffs = content.to_numpy()
+        diffs = np.nan_to_num(diffs, nan=0.0, posinf=None, neginf=None)
+        lats = np.array(content.index)
+        longs = np.zeros(lats.shape)
+        longs[:] = label
+        all_lats.append(lats)
+        all_longs.append(longs)
+        all_heights.append(diffs)
+    return np.stack(all_lats), np.stack(all_longs), np.stack(all_heights)
+
+
 def image_to_points(dep, step=50, custom_connectivity=False):
     points = []
     index = 0
@@ -454,7 +472,17 @@ def main(
             ExtrusionSolver, typer.Option(
                 help="What solver to use for to extrude")] = ExtrusionSolver.custom,
         extrude_surface_to_depth: Annotated[
-            float, typer.Option(help="Extrude topography mesh to depth (in Km)")] = 0.0
+            float, typer.Option(help="Extrude topography mesh to depth (in Km)")] = 0.0,
+        bounding_box_output: Annotated[
+            str, typer.Option(help="Where to store the bounding box mesh (does not generate if not specified)")] = None,
+        bb_distance_from_topography: Annotated[
+            int, typer.Option(help="How far away should the bb be from the topography")] = 1,
+        bb_mesh_size: Annotated[
+            float, typer.Option(help="size of the bounding box mesh (in m)")] = 500,
+        bb_depth_below_topography: Annotated[
+            int, typer.Option(help="How deep bounding box be from the topography(in Km)")] = 5,
+        show_bb_before_saving: Annotated[
+            bool, typer.Option(help="Show bounding box in gmsh ui before saving")] = False
 ):
     if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
         print('Cannot use custom solver with "num_chunks_for_topo">1')
@@ -462,6 +490,10 @@ def main(
 
     if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
         print('Cannot use custom extrusion solver without custom topo solver')
+        exit()
+
+    if bounding_box_output is not None and topography_step != 1:
+        print("Cannot create bounding box if batching topography")
         exit()
 
     fast_path = False
@@ -618,6 +650,46 @@ def main(
         pv.save_meshio(topography_output, topo_surface)
         print(f"Saving faults : {fault_output}")
         pv.save_meshio(fault_output, all_wall_meshes.combine())
+
+    if bounding_box_output is not None:
+        print("Generating bounding box")
+        lats, longs, diffs = generate_image_from_dem(dem)
+        x_index = np.array([bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
+                            -bb_distance_from_topography - 1])
+        y_index = np.array([bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
+                            -bb_distance_from_topography - 1])
+        height = np.max(diffs)
+        box_lats = lats[x_index, y_index]
+        box_longs = longs[x_index, y_index]
+        box_points = get_cartesian(box_lats, box_longs, height)
+        box_points = apply_rotation_points(box_points, rotation_matrix)
+        box_points = apply_centering_points(box_points, center)
+
+        gmsh.initialize()
+        gmsh.model.add("Bounding Box")
+        p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
+        p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
+        p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
+        p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
+
+        l1 = gmsh.model.geo.addLine(p1, p2)
+        l2 = gmsh.model.geo.addLine(p2, p4)
+        l3 = gmsh.model.geo.addLine(p4, p3)
+        l4 = gmsh.model.geo.addLine(p3, p1)
+
+        # Create Line Loop and Plane Surface
+        ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+        ps = gmsh.model.geo.addPlaneSurface([ll])
+
+        gmsh.model.geo.extrude([(2, ps)], 0, 0, -bb_depth_below_topography * 1000)
+        gmsh.model.geo.synchronize()
+        gmsh.model.mesh.generate(2)
+
+        if show_bb_before_saving:
+            gmsh.fltk.run()
+        print(f"Saving bounding box mesh {bounding_box_output}")
+        gmsh.write(f"{bounding_box_output}")
+        gmsh.finalize()
 
 
 if __name__ == "__main__":
