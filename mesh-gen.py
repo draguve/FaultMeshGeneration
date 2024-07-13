@@ -26,6 +26,16 @@ from sklearn.decomposition import PCA
 from enum import Enum
 import meshio
 import gmsh
+from skimage.util.shape import view_as_windows
+
+
+def strided4D(arr, arr2, s):
+    return view_as_windows(arr, arr2.shape, step=s)
+
+
+def stride_conv_strided(arr, arr2, s):
+    arr4D = strided4D(arr, arr2, s=s)
+    return np.tensordot(arr4D, arr2, axes=((2, 3), (0, 1)))
 
 
 # from vtkmodules.vtkCommonDataModel import vtkImplicitPolyDataDistance
@@ -535,6 +545,20 @@ def main(
     if num_chunks_for_topo == 1:
         print("Downloading topography")
         dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
+        lats, longs, diffs = generate_image_from_dem(dem)
+        before = get_cartesian(lats.flatten(),longs.flatten(),diffs.flatten())
+        if topography_step > 1:
+            kernel = np.ones((topography_step, topography_step)) / (topography_step ** 2)
+            lats = stride_conv_strided(lats, kernel, topography_step)
+            longs = stride_conv_strided(longs, kernel, topography_step)
+            diffs = stride_conv_strided(diffs, kernel, topography_step)
+        after = get_cartesian(lats.flatten(),longs.flatten(),diffs.flatten())
+
+        plotter = pv.Plotter()
+        plotter.add_mesh(pv.PolyData(before), "red", "wireframe")
+        plotter.add_mesh(pv.PolyData(after), "blue", "wireframe")
+        plotter.show()
+
         topograph_grid_points, custom_connectivity = image_to_points(dem, step=topography_step,
                                                                      custom_connectivity=topo_solver == TopographySolver.custom)
         topograph_points = topograph_grid_points.reshape(-1, 3)
@@ -653,7 +677,7 @@ def main(
 
     if bounding_box_output is not None:
         print("Generating bounding box")
-        lats, longs, diffs = generate_image_from_dem(dem)
+
         x_index = np.array([bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
                             -bb_distance_from_topography - 1])
         y_index = np.array([bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
