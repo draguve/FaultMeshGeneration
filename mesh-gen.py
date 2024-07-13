@@ -281,7 +281,6 @@ def generate_image_from_dem(dem):
     all_lats = []
     all_longs = []
     for label, content in dem.to_pandas().items():
-        long = label
         diffs = content.to_numpy()
         diffs = np.nan_to_num(diffs, nan=0.0, posinf=None, neginf=None)
         lats = np.array(content.index)
@@ -442,44 +441,77 @@ class ExtrusionSolver(str, Enum):
 
 def main(
         input_file: Annotated[str, typer.Argument(help="Path for the input file, containing latitude and longitudes")],
-        fault_output: Annotated[str, typer.Option(help="Fault output filename")] = "faults.stl",
-        topography_output: Annotated[str, typer.Option(help="Topography output filename")] = "topography.stl",
-        plot: Annotated[bool, typer.Option(help="Show fault and topography mesh")] = False,
-        fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography")] = 2,
-        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography")] = 4,
-        just_check_res: Annotated[
-            bool, typer.Option(help="Just check all the topography resolutions available for a region")] = False,
-        topography_resolution: Annotated[int, typer.Option(help="Set resolution in m to use")] = 30,
-        verbose: Annotated[bool, typer.Option(help="Verbose")] = False,
-        surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box")] = 0.01,
-        topography_step: Annotated[int, typer.Option(help="Stride for topography")] = 1,
-        save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
+
+        # Options about fault
+        fault_output: Annotated[
+            str, typer.Option(help="Fault output filepath", rich_help_panel="Fault Options")] = "faults.stl",
+        fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography",
+                                                  rich_help_panel="Fault Options")] = 2,
+        fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography",
+                                                 rich_help_panel="Fault Options")] = 4,
         fault_resolution: Annotated[
-            float, typer.Option(help="How big should the triangles in the fault be (in m)")] = 50,
+            float, typer.Option(help="How big should the triangles in the fault be (in m)",
+                                rich_help_panel="Fault Options")] = 50,
+
+        # Options about topography
+        topography_output: Annotated[str, typer.Option(help="Topography output filepath",
+                                                       rich_help_panel="Topography Options")] = "topography.stl",
+        just_check_res: Annotated[
+            bool, typer.Option(help="Just check all the topography resolutions available for a region",
+                               rich_help_panel="Topography Options")] = False,
+        topography_resolution: Annotated[
+            int, typer.Option(help="Set resolution in m to use", rich_help_panel="Topography Options")] = 30,
+        topography_step: Annotated[
+            int, typer.Option(help="Stride for topography", rich_help_panel="Topography Options")] = 1,
+        surrounding_region: Annotated[float, typer.Option(help="How far in Lat longs to make the bounding box",
+                                                          rich_help_panel="Topography Options")] = 0.01,
         topo_solver: Annotated[
             TopographySolver, typer.Option(
-                help="What solver to use for point cloud (VTK's crashes on bigger point clouds) (custom does not work with chunked download")] = TopographySolver.custom,
+                help="What solver to use for point cloud (VTK's crashes on bigger point clouds) (custom does not work with chunked download",
+                rich_help_panel="Topography Options")] = TopographySolver.custom,
         compare_solver: Annotated[
-            bool, typer.Option(help="Compare generated topography to vtk's delaunay impl")] = False,
-        fast_path_disabled: Annotated[
-            bool, typer.Option(help="Disable fast path (uses meshio only)")] = False,
+            bool, typer.Option(help="Compare generated topography to vtk's delaunay impl",
+                               rich_help_panel="Topography Options")] = False,
+        compare_topo_resample: Annotated[
+            bool, typer.Option(help="Show plot comparing the topography before and after convolution",
+                               rich_help_panel="Topography Options")] = False,
+
+        # Options about extrusion
         extrusion_solver: Annotated[
             ExtrusionSolver, typer.Option(
-                help="What solver to use for to extrude")] = ExtrusionSolver.custom,
+                help="What solver to use for to extrude",
+                rich_help_panel="Extrusion Options")] = ExtrusionSolver.custom,
         extrude_surface_to_depth: Annotated[
-            float, typer.Option(help="Extrude topography mesh to depth (in Km)")] = 0.0,
+            float, typer.Option(help="Extrude topography mesh to depth (in Km)",
+                                rich_help_panel="Extrusion Options")] = 0.0,
+
+        # Bounding Box Options
         bounding_box_output: Annotated[
-            str, typer.Option(help="Where to store the bounding box mesh (does not generate if not specified)")] = None,
+            str, typer.Option(help="Where to store the bounding box mesh (does not generate if not specified)",
+                              rich_help_panel="Bounding Box Options")] = None,
         bb_distance_from_topography: Annotated[
-            int, typer.Option(help="How far away should the bb be from the topography")] = 1,
+            int, typer.Option(help="How far away should the bb be from the topography",
+                              rich_help_panel="Bounding Box Options")] = 1,
         bb_mesh_size: Annotated[
-            float, typer.Option(help="size of the bounding box mesh (in m)")] = 500,
+            float, typer.Option(help="size of the bounding box mesh (in m)",
+                                rich_help_panel="Bounding Box Options")] = 500,
         bb_depth_below_topography: Annotated[
-            int, typer.Option(help="How deep bounding box be from the topography(in Km)")] = 5,
-        show_bb_before_saving: Annotated[
-            bool, typer.Option(help="Show bounding box in gmsh ui before saving")] = False,
-        compare_before_and_after_topo_step: Annotated[
-            bool, typer.Option(help="Show plot comparing the topography before and after convolution")] = False
+            int, typer.Option(help="How deep bounding box be from the topography(in Km)",
+                              rich_help_panel="Bounding Box Options")] = 5,
+        plot_bb: Annotated[
+            bool, typer.Option(help="Show bounding box in gmsh ui before saving",
+                               rich_help_panel="Bounding Box Options")] = False,
+
+        # Misc
+        save: Annotated[bool, typer.Option(help="Should you save the output meshes or not",
+                                           rich_help_panel="Miscellaneous Options")] = True,
+        plot: Annotated[bool, typer.Option(help="Show fault and topography mesh",
+                                           rich_help_panel="Miscellaneous Options")] = False,
+        verbose: Annotated[bool, typer.Option(help="Verbose",
+                                              rich_help_panel="Miscellaneous Options")] = False,
+        fast_path_disabled: Annotated[
+            bool, typer.Option(help="Disable fast path (uses meshio only)",
+                               rich_help_panel="Miscellaneous Options")] = False,
 ):
     if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
         print('Cannot use custom extrusion solver without custom topo solver')
@@ -523,7 +555,7 @@ def main(
     lats, longs, diffs = generate_image_from_dem(dem)
 
     before = None
-    if compare_before_and_after_topo_step:
+    if compare_topo_resample:
         before = get_cartesian(lats.flatten(), longs.flatten(), diffs.flatten())
 
     # reduce topography if required
@@ -533,12 +565,12 @@ def main(
         longs = stride_conv_strided(longs, kernel, topography_step)
         diffs = stride_conv_strided(diffs, kernel, topography_step)
 
-    if compare_before_and_after_topo_step:
+    if compare_topo_resample:
         after = get_cartesian(lats.flatten(), longs.flatten(), diffs.flatten())
 
         plotter = pv.Plotter()
-        plotter.add_mesh(pv.PolyData(before), "red", "wireframe",point_size=5)
-        plotter.add_mesh(pv.PolyData(after), "blue", "wireframe",point_size=7)
+        plotter.add_mesh(pv.PolyData(before), "red", "wireframe", point_size=5)
+        plotter.add_mesh(pv.PolyData(after), "blue", "wireframe", point_size=7)
         plotter.show()
 
     topograph_grid_points, custom_connectivity = image_to_points(lats, longs, diffs,
@@ -682,7 +714,7 @@ def main(
         gmsh.model.geo.synchronize()
         gmsh.model.mesh.generate(2)
 
-        if show_bb_before_saving:
+        if plot_bb:
             gmsh.fltk.run()
         print(f"Saving bounding box mesh {bounding_box_output}")
         gmsh.write(f"{bounding_box_output}")
