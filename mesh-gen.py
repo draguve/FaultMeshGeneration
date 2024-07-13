@@ -293,21 +293,12 @@ def generate_image_from_dem(dem):
     return np.stack(all_lats), np.stack(all_longs), np.stack(all_heights)
 
 
-def image_to_points(dep, step=50, custom_connectivity=False):
+def image_to_points(lats, longs, diffs, custom_connectivity=False):
     points = []
-    index = 0
-    for label, content in dep.to_pandas().items():
-        index = index + 1
-        if index % step != 0:
-            continue
-        long = label
-        diffs = content.to_numpy()
-        diffs = np.nan_to_num(diffs, nan=0.0, posinf=None, neginf=None)
-        lats = np.array(content.index)
-        longs = np.zeros(lats.shape)
-        longs[:] = label
-        verts = get_cartesian(lat_deg=lats, lon_deg=longs, alt=diffs)  # again this is weird
-        points.append(verts[::step])
+    x, y = lats.shape
+    for i in range(x):
+        verts = get_cartesian(lat_deg=lats[i, :], lon_deg=longs[i, :], alt=diffs[i])  # again this is weird
+        points.append(verts)
     verts = np.stack(points)
 
     if custom_connectivity:
@@ -326,19 +317,14 @@ def get_edges(topograph_grid_points):
     return top_sides
 
 
-def generate_extrusion(dep, step, extrude_surface_to_depth, rotation_matrix, center, topograph_grid_points,
+def generate_extrusion(lats, longs, extrude_surface_to_depth, rotation_matrix, center, topograph_grid_points,
                        top_topo_connectivity, step_size):
     points = []
-    index = 0
-    for label, content in dep.to_pandas().items():
-        index = index + 1
-        if index % step != 0:
-            continue
-        lats = np.array(content.index)
-        longs = np.zeros(lats.shape)
-        longs[:] = label
-        verts = get_cartesian(lat_deg=lats, lon_deg=longs, alt=-extrude_surface_to_depth * 1000)
-        points.append(verts[::step])
+    x, y = lats.shape
+    for i in range(x):
+        verts = get_cartesian(lat_deg=lats[i, :], lon_deg=longs[i, :],
+                              alt=-extrude_surface_to_depth * 1000)  # again this is weird
+        points.append(verts)
     bottom_grid_points = np.stack(points)
     bottom_grid_points = apply_rotation_points(bottom_grid_points, rotation_matrix)
     bottom_grid_points = apply_centering_points(bottom_grid_points, center)
@@ -470,7 +456,6 @@ def main(
         save: Annotated[bool, typer.Option(help="Should you save the output meshes or not")] = True,
         fault_resolution: Annotated[
             float, typer.Option(help="How big should the triangles in the fault be (in m)")] = 50,
-        num_chunks_for_topo: Annotated[int, typer.Option(help="How much to split the topography while loading")] = 1,
         topo_solver: Annotated[
             TopographySolver, typer.Option(
                 help="What solver to use for point cloud (VTK's crashes on bigger point clouds) (custom does not work with chunked download")] = TopographySolver.custom,
@@ -492,18 +477,12 @@ def main(
         bb_depth_below_topography: Annotated[
             int, typer.Option(help="How deep bounding box be from the topography(in Km)")] = 5,
         show_bb_before_saving: Annotated[
-            bool, typer.Option(help="Show bounding box in gmsh ui before saving")] = False
+            bool, typer.Option(help="Show bounding box in gmsh ui before saving")] = False,
+        compare_before_and_after_topo_step: Annotated[
+            bool, typer.Option(help="Show plot comparing the topography before and after convolution")] = False
 ):
-    if topo_solver == TopographySolver.custom and num_chunks_for_topo > 1:
-        print('Cannot use custom solver with "num_chunks_for_topo">1')
-        exit()
-
     if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
         print('Cannot use custom extrusion solver without custom topo solver')
-        exit()
-
-    if bounding_box_output is not None and topography_step != 1:
-        print("Cannot create bounding box if batching topography")
         exit()
 
     fast_path = False
@@ -515,8 +494,7 @@ def main(
             print("Using Fast Path")
             fast_path = True
 
-    filtered_records = read_csv(input_file)
-    to_generate = filtered_records[:]
+    to_generate = read_csv(input_file)
     num_walls = len(to_generate)
     all_lat_longs = []
 
@@ -540,36 +518,32 @@ def main(
         print(f"Resolution {topography_resolution}m not available")
         exit()
 
-    topograph_points = None
-    custom_connectivity = None
-    if num_chunks_for_topo == 1:
-        print("Downloading topography")
-        dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
-        lats, longs, diffs = generate_image_from_dem(dem)
-        before = get_cartesian(lats.flatten(),longs.flatten(),diffs.flatten())
-        if topography_step > 1:
-            kernel = np.ones((topography_step, topography_step)) / (topography_step ** 2)
-            lats = stride_conv_strided(lats, kernel, topography_step)
-            longs = stride_conv_strided(longs, kernel, topography_step)
-            diffs = stride_conv_strided(diffs, kernel, topography_step)
-        after = get_cartesian(lats.flatten(),longs.flatten(),diffs.flatten())
+    print(f"Downloading topography for region: {dep3_bounding_box}")
+    dem = py3dep.get_dem(dep3_bounding_box, topography_resolution)
+    lats, longs, diffs = generate_image_from_dem(dem)
+
+    before = None
+    if compare_before_and_after_topo_step:
+        before = get_cartesian(lats.flatten(), longs.flatten(), diffs.flatten())
+
+    # reduce topography if required
+    if topography_step > 1:
+        kernel = np.ones((topography_step, topography_step)) / (topography_step ** 2)
+        lats = stride_conv_strided(lats, kernel, topography_step)
+        longs = stride_conv_strided(longs, kernel, topography_step)
+        diffs = stride_conv_strided(diffs, kernel, topography_step)
+
+    if compare_before_and_after_topo_step:
+        after = get_cartesian(lats.flatten(), longs.flatten(), diffs.flatten())
 
         plotter = pv.Plotter()
-        plotter.add_mesh(pv.PolyData(before), "red", "wireframe")
-        plotter.add_mesh(pv.PolyData(after), "blue", "wireframe")
+        plotter.add_mesh(pv.PolyData(before), "red", "wireframe",point_size=5)
+        plotter.add_mesh(pv.PolyData(after), "blue", "wireframe",point_size=7)
         plotter.show()
 
-        topograph_grid_points, custom_connectivity = image_to_points(dem, step=topography_step,
-                                                                     custom_connectivity=topo_solver == TopographySolver.custom)
-        topograph_points = topograph_grid_points.reshape(-1, 3)
-    else:
-        sub_bounding_boxes = chunk_bounding_box(dep3_bounding_box, num_chunks_for_topo)
-        all_topograph_points = []
-        for sub_box in tqdm(sub_bounding_boxes, "Getting Topography"):
-            dem = py3dep.get_dem(sub_box, topography_resolution)
-            tp, _ = image_to_points(dem, step=topography_step)
-            all_topograph_points.append(tp.reshape(-1, 3))
-        topograph_points = np.vstack(all_topograph_points)
+    topograph_grid_points, custom_connectivity = image_to_points(lats, longs, diffs,
+                                                                 custom_connectivity=topo_solver == TopographySolver.custom)
+    topograph_points = topograph_grid_points.reshape(-1, 3)
 
     print(f"Num points for topography : {topograph_points.shape}")
     rotational_center = get_center(topograph_points)
@@ -577,7 +551,7 @@ def main(
     topograph_points = apply_rotation_points(topograph_points, rotation_matrix)
     center = get_center(topograph_points)
     topograph_points = apply_centering_points(topograph_points, center)
-
+    topo_surface = None
     if topo_solver == TopographySolver.scipy:
         # Perform PCA to reduce to 2D
         print(f"Finding optimal plane to project to")
@@ -609,7 +583,7 @@ def main(
             topo_surface = topo_surface.extrude_trim((0, 0, -1.0), plane).triangulate()
         elif extrusion_solver == ExtrusionSolver.custom:
             if topo_solver == TopographySolver.custom:
-                topograph_points, custom_connectivity = generate_extrusion(dem, topography_step,
+                topograph_points, custom_connectivity = generate_extrusion(lats, longs,
                                                                            extrude_surface_to_depth, rotation_matrix,
                                                                            center,
                                                                            topograph_grid_points, custom_connectivity,
@@ -655,25 +629,24 @@ def main(
             fault_cells
         )
         fault_mesh.write(fault_output)
-        exit()
+    else:
+        if plot:
+            plotter = pv.Plotter()
+            plotter.add_mesh(topo_surface, "red", "wireframe")
+            plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
+            if compare_solver and topo_solver != TopographySolver.vtk:
+                topo_points2 = pv.PolyData(topograph_points)
+                topo_surface2 = topo_points2.delaunay_2d(progress_bar=True)
+                plotter.add_mesh(topo_surface2, "green", "wireframe", opacity=0.5)
+            elif compare_solver:
+                print("Cannot compare vtk")
+            plotter.show()
 
-    if plot:
-        plotter = pv.Plotter()
-        plotter.add_mesh(topo_surface, "red", "wireframe")
-        plotter.add_mesh(all_wall_meshes, "blue", "wireframe")
-        if compare_solver and topo_solver != TopographySolver.vtk:
-            topo_points2 = pv.PolyData(topograph_points)
-            topo_surface2 = topo_points2.delaunay_2d(progress_bar=True)
-            plotter.add_mesh(topo_surface2, "green", "wireframe", opacity=0.5)
-        elif compare_solver:
-            print("Cannot compare vtk")
-        plotter.show()
-
-    if save:
-        print(f"Saving topography : {topography_output}")
-        pv.save_meshio(topography_output, topo_surface)
-        print(f"Saving faults : {fault_output}")
-        pv.save_meshio(fault_output, all_wall_meshes.combine())
+        if save:
+            print(f"Saving topography : {topography_output}")
+            pv.save_meshio(topography_output, topo_surface)
+            print(f"Saving faults : {fault_output}")
+            pv.save_meshio(fault_output, all_wall_meshes.combine())
 
     if bounding_box_output is not None:
         print("Generating bounding box")
@@ -717,5 +690,4 @@ def main(
 
 
 if __name__ == "__main__":
-    # main("curved_output.csv", plot=True, save=False, num_chunks_for_topo=1,fault_resolution=500)
     typer.run(main)
