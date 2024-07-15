@@ -27,6 +27,7 @@ from enum import Enum
 import meshio
 import gmsh
 from skimage.util.shape import view_as_windows
+import h5py
 
 
 def strided4D(arr, arr2, s):
@@ -444,7 +445,7 @@ def main(
 
         # Options about fault
         fault_output: Annotated[
-            str, typer.Option(help="Fault output filepath", rich_help_panel="Fault Options")] = "faults.stl",
+            str, typer.Option(help="Fault output filepath", rich_help_panel="Fault Options")] = None,
         fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography",
                                                   rich_help_panel="Fault Options")] = 2,
         fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography",
@@ -455,7 +456,7 @@ def main(
 
         # Options about topography
         topography_output: Annotated[str, typer.Option(help="Topography output filepath",
-                                                       rich_help_panel="Topography Options")] = "topography.stl",
+                                                       rich_help_panel="Topography Options")] = None,
         just_check_res: Annotated[
             bool, typer.Option(help="Just check all the topography resolutions available for a region",
                                rich_help_panel="Topography Options")] = False,
@@ -503,8 +504,6 @@ def main(
                                rich_help_panel="Bounding Box Options")] = False,
 
         # Misc
-        save: Annotated[bool, typer.Option(help="Should you save the output meshes or not",
-                                           rich_help_panel="Miscellaneous Options")] = True,
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh",
                                            rich_help_panel="Miscellaneous Options")] = False,
         verbose: Annotated[bool, typer.Option(help="Verbose",
@@ -512,6 +511,9 @@ def main(
         fast_path_disabled: Annotated[
             bool, typer.Option(help="Disable fast path (uses meshio only)",
                                rich_help_panel="Miscellaneous Options")] = False,
+        meta_data_output: Annotated[
+                    str, typer.Option(help="Output file name for h5 file storing center and rotational Matrix",
+                                       rich_help_panel="Miscellaneous Options")] = None,
 ):
     if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
         print('Cannot use custom extrusion solver without custom topo solver')
@@ -604,6 +606,13 @@ def main(
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
+    print(f"Center: {center}")
+    print(f"Rotational Matrix: {rotation_matrix}")
+    if meta_data_output is not None:
+        hf = h5py.File(f'{meta_data_output}.h5', 'w')
+        hf.create_dataset('center', data=center)
+        hf.create_dataset('rotation_matrix', data=rotation_matrix)
+
     if extrude_surface_to_depth != 0.0:
         if extrusion_solver == ExtrusionSolver.pyvista:
             plane = pv.Plane(
@@ -643,24 +652,26 @@ def main(
             accumulated_num_points = accumulated_num_points + wall_points.shape[0]
 
     if fast_path:
-        print(f"Saving topography : {topography_output}")
-        topo_cells = [
-            ("triangle", custom_connectivity.reshape(-1, 4)[:, 1:]),
-        ]
-        topo_mesh = meshio.Mesh(
-            topograph_points,
-            topo_cells
-        )
-        topo_mesh.write(topography_output)
-        print(f"Saving faults : {fault_output}")
-        fault_cells = [
-            ("triangle", np.vstack(all_wall_connectivity)),
-        ]
-        fault_mesh = meshio.Mesh(
-            np.vstack(all_wall_points),
-            fault_cells
-        )
-        fault_mesh.write(fault_output)
+        if topography_output is not None:
+            print(f"Saving topography : {topography_output}")
+            topo_cells = [
+                ("triangle", custom_connectivity.reshape(-1, 4)[:, 1:]),
+            ]
+            topo_mesh = meshio.Mesh(
+                topograph_points,
+                topo_cells
+            )
+            topo_mesh.write(topography_output)
+        if fault_output is not None:
+            print(f"Saving faults : {fault_output}")
+            fault_cells = [
+                ("triangle", np.vstack(all_wall_connectivity)),
+            ]
+            fault_mesh = meshio.Mesh(
+                np.vstack(all_wall_points),
+                fault_cells
+            )
+            fault_mesh.write(fault_output)
     else:
         if plot:
             plotter = pv.Plotter()
@@ -674,9 +685,10 @@ def main(
                 print("Cannot compare vtk")
             plotter.show()
 
-        if save:
+        if topography_output is not None:
             print(f"Saving topography : {topography_output}")
             pv.save_meshio(topography_output, topo_surface)
+        if fault_output is not None:
             print(f"Saving faults : {fault_output}")
             pv.save_meshio(fault_output, all_wall_meshes.combine())
 
