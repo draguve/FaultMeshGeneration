@@ -1,33 +1,21 @@
-import folium
-import zipfile
-import io
-from fastkml import kml
-import pandas as pd
-from io import StringIO
-import csv
-from tqdm import tqdm
-import numpy as np
-import matplotlib.pyplot as plt
-import pyvista as pv
-import py3dep
-import vtk
-import tetgen
-import matplotlib.colors as mcolors
-from vtkmodules.vtkFiltersCore import vtkCutter
-from vtkmodules.vtkCommonDataModel import vtkPlane
-import pymeshfix
-import typer
-import os
-from pprint import pprint
-import requests_cache
-from typing_extensions import Annotated
-from scipy.spatial import Delaunay
-from sklearn.decomposition import PCA
+import sys
 from enum import Enum
-import meshio
+from pprint import pprint
+
+import click
 import gmsh
-from skimage.util.shape import view_as_windows
 import h5py
+import meshio
+import numpy as np
+import pandas as pd
+import py3dep
+import pyvista as pv
+import typer
+from scipy.spatial import Delaunay
+from skimage.util.shape import view_as_windows
+from sklearn.decomposition import PCA
+from tqdm import tqdm
+from typing_extensions import Annotated
 
 
 def strided4D(arr, arr2, s):
@@ -362,7 +350,8 @@ def generate_extrusion(lats, longs, extrude_surface_to_depth, rotation_matrix, c
 
 
 def read_csv(filename):
-    df = pd.read_csv(filename, index_col='Name', encoding='cp1252')
+    # df = pd.read_csv(filename, index_col='Name', encoding='utf-8')
+    df = pd.read_csv(open(filename, errors='replace'), index_col="Name")
     return list(df.itertuples(index=False, name=None))
 
 
@@ -512,8 +501,8 @@ def main(
             bool, typer.Option(help="Disable fast path (uses meshio only)",
                                rich_help_panel="Miscellaneous Options")] = False,
         meta_data_output: Annotated[
-                    str, typer.Option(help="Output file name for h5 file storing center and rotational Matrix",
-                                       rich_help_panel="Miscellaneous Options")] = None,
+            str, typer.Option(help="Output file name for h5 file storing center and rotational Matrix",
+                              rich_help_panel="Miscellaneous Options")] = None,
 ):
     if topo_solver != TopographySolver.custom and extrude_surface_to_depth != 0.0 and extrusion_solver == ExtrusionSolver.custom:
         print('Cannot use custom extrusion solver without custom topo solver')
@@ -609,9 +598,23 @@ def main(
     print(f"Center: {center}")
     print(f"Rotational Matrix: {rotation_matrix}")
     if meta_data_output is not None:
-        hf = h5py.File(f'{meta_data_output}.h5', 'w')
-        hf.create_dataset('center', data=center)
-        hf.create_dataset('rotation_matrix', data=rotation_matrix)
+        with h5py.File(f'{meta_data_output}.h5', 'w') as hf:
+            hf.create_dataset('center', data=center)
+            hf.create_dataset('rotation_matrix', data=rotation_matrix)
+
+            meta = hf.create_group("meta")
+            meta.attrs["input_command"] = " ".join(sys.argv)
+
+            all_args = click.get_current_context().params
+            for key, item in all_args.items():
+                meta.attrs[key] = str(item)
+
+            dt = h5py.special_dtype(vlen=str)
+            fault_input = np.array(to_generate)
+            dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
+            dset[:] = fault_input
+
+            hf.create_dataset("all_long_lats", data=all_long_lats)
 
     if extrude_surface_to_depth != 0.0:
         if extrusion_solver == ExtrusionSolver.pyvista:
