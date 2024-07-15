@@ -486,8 +486,11 @@ def main(
             float, typer.Option(help="size of the bounding box mesh (in m)",
                                 rich_help_panel="Bounding Box Options")] = 500,
         bb_depth_below_topography: Annotated[
-            int, typer.Option(help="How deep bounding box be from the topography(in Km)",
-                              rich_help_panel="Bounding Box Options")] = 5,
+            float, typer.Option(help="How deep bounding box be from the topography(in Km)",
+                                rich_help_panel="Bounding Box Options")] = 5,
+        bb_height_above_topography: Annotated[
+            float, typer.Option(help="How high bounding box be above the topography(in Km)",
+                                rich_help_panel="Bounding Box Options")] = 0.5,
         plot_bb: Annotated[
             bool, typer.Option(help="Show bounding box in gmsh ui before saving",
                                rich_help_panel="Bounding Box Options")] = False,
@@ -595,27 +598,6 @@ def main(
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
-    print(f"Center: {center}")
-    print(f"Rotational Matrix: {rotation_matrix}")
-    if meta_data_output is not None:
-        with h5py.File(f'{meta_data_output}.h5', 'w') as hf:
-            hf.create_dataset('center', data=center)
-            hf.create_dataset('rotation_matrix', data=rotation_matrix)
-
-            meta = hf.create_group("meta")
-            meta.attrs["input_command"] = " ".join(sys.argv)
-
-            all_args = click.get_current_context().params
-            for key, item in all_args.items():
-                meta.attrs[key] = str(item)
-
-            dt = h5py.special_dtype(vlen=str)
-            fault_input = np.array(to_generate)
-            dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
-            dset[:] = fault_input
-
-            hf.create_dataset("all_long_lats", data=all_long_lats)
-
     if extrude_surface_to_depth != 0.0:
         if extrusion_solver == ExtrusionSolver.pyvista:
             plane = pv.Plane(
@@ -644,15 +626,67 @@ def main(
     for i in tqdm(range(num_walls), desc="Generating Walls"):
         wall_points, wall_connectivity = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
                                                      down_diff=fault_depth, step_size=fault_resolution)
+        all_wall_points.append(wall_points)
         if not fast_path:
             wall = pv.PolyData(wall_points, wall_connectivity)
             all_wall_meshes.append(wall)
         else:
-            all_wall_points.append(wall_points)
             wall_triangles = wall_connectivity.reshape(-1, 4)[:, 1:]
             wall_triangles = wall_triangles + accumulated_num_points
             all_wall_connectivity.append(wall_triangles)
             accumulated_num_points = accumulated_num_points + wall_points.shape[0]
+
+    bounding_box_points = None
+    if bounding_box_output is not None:
+        print("Generating bounding box")
+
+        x_index = np.array([bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
+                            -bb_distance_from_topography - 1])
+        y_index = np.array([bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
+                            -bb_distance_from_topography - 1])
+        height = np.max(diffs) + bb_height_above_topography * 1000
+        box_lats = lats[x_index, y_index]
+        box_longs = longs[x_index, y_index]
+        box_points = get_cartesian(box_lats, box_longs, height)
+        box_points = apply_rotation_points(box_points, rotation_matrix)
+        box_points = apply_centering_points(box_points, center)
+
+        gmsh.initialize()
+        gmsh.model.add("Bounding Box")
+        p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
+        p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
+        p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
+        p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
+
+        l1 = gmsh.model.geo.addLine(p1, p2)
+        l2 = gmsh.model.geo.addLine(p2, p4)
+        l3 = gmsh.model.geo.addLine(p4, p3)
+        l4 = gmsh.model.geo.addLine(p3, p1)
+
+        # Create Line Loop and Plane Surface
+        ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+        ps = gmsh.model.geo.addPlaneSurface([ll])
+
+        gmsh.model.geo.extrude([(2, ps)], 0, 0, -bb_depth_below_topography * 1000)
+        gmsh.model.geo.synchronize()
+        gmsh.model.mesh.generate(2)
+
+        if plot_bb:
+            gmsh.fltk.run()
+        print(f"Saving bounding box mesh {bounding_box_output}")
+        gmsh.write(f"{bounding_box_output}")
+
+        # Get the coordinates of the original and extruded points
+        all_points = gmsh.model.getEntities(0)  # Get all points (0 stands for point entity)
+        point_coords = []
+        for point in all_points:
+            coord = gmsh.model.getValue(0, point[1], [])
+            point_coords.append(coord)
+
+        # Convert the list of coordinates to a numpy array of shape (8, 3)
+        bounding_box_points = np.array(point_coords).reshape(8, 3)
+        gmsh.finalize()
+        # print(bounding_box_points)
 
     if fast_path:
         if topography_output is not None:
@@ -686,6 +720,8 @@ def main(
                 plotter.add_mesh(topo_surface2, "green", "wireframe", opacity=0.5)
             elif compare_solver:
                 print("Cannot compare vtk")
+            if bounding_box_points is not None:
+                plotter.add_mesh(pv.PolyData(bounding_box_points), "yellow")
             plotter.show()
 
         if topography_output is not None:
@@ -695,45 +731,32 @@ def main(
             print(f"Saving faults : {fault_output}")
             pv.save_meshio(fault_output, all_wall_meshes.combine())
 
-    if bounding_box_output is not None:
-        print("Generating bounding box")
+    print(f"Center: {center}")
+    print(f"Rotational Matrix: {rotation_matrix}")
+    if meta_data_output is not None:
+        print(f"Generating meta file at {meta_data_output}.h5")
+        with h5py.File(f'{meta_data_output}.h5', 'w') as hf:
+            hf.create_dataset('center', data=center)
+            hf.create_dataset('rotation_matrix', data=rotation_matrix)
 
-        x_index = np.array([bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
-                            -bb_distance_from_topography - 1])
-        y_index = np.array([bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
-                            -bb_distance_from_topography - 1])
-        height = np.max(diffs)
-        box_lats = lats[x_index, y_index]
-        box_longs = longs[x_index, y_index]
-        box_points = get_cartesian(box_lats, box_longs, height)
-        box_points = apply_rotation_points(box_points, rotation_matrix)
-        box_points = apply_centering_points(box_points, center)
+            meta = hf.create_group("meta")
+            meta.attrs["input_command"] = " ".join(sys.argv)
 
-        gmsh.initialize()
-        gmsh.model.add("Bounding Box")
-        p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
-        p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
-        p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
-        p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
+            all_args = click.get_current_context().params
+            for key, item in all_args.items():
+                meta.attrs[key] = str(item)
 
-        l1 = gmsh.model.geo.addLine(p1, p2)
-        l2 = gmsh.model.geo.addLine(p2, p4)
-        l3 = gmsh.model.geo.addLine(p4, p3)
-        l4 = gmsh.model.geo.addLine(p3, p1)
+            dt = h5py.special_dtype(vlen=str)
+            fault_input = np.array(to_generate)
+            dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
+            dset[:] = fault_input
 
-        # Create Line Loop and Plane Surface
-        ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
-        ps = gmsh.model.geo.addPlaneSurface([ll])
+            hf.create_dataset("all_long_lats", data=all_long_lats)
+            hf.create_dataset("fault_points", data=np.vstack(all_wall_points))
+            if bounding_box_points is not None:
+                hf.create_dataset("bounding_box", data=bounding_box_points)
 
-        gmsh.model.geo.extrude([(2, ps)], 0, 0, -bb_depth_below_topography * 1000)
-        gmsh.model.geo.synchronize()
-        gmsh.model.mesh.generate(2)
-
-        if plot_bb:
-            gmsh.fltk.run()
-        print(f"Saving bounding box mesh {bounding_box_output}")
-        gmsh.write(f"{bounding_box_output}")
-        gmsh.finalize()
+            # if bounding_box_output is not None:
 
 
 if __name__ == "__main__":
