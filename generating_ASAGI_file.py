@@ -24,7 +24,7 @@ def writeNetcdf4Paraview(sname, x, y, z, aName, aData):
     vz = rootgrp.createVariable("w", "f4", ("w",))
     vz[:] = z
     for i in range(len(aName)):
-        vTd = rootgrp.createVariable(aName[i], "f4", ("v", "u", "w"))
+        vTd = rootgrp.createVariable(aName[i], "f4", ("u", "v", "w"))
         vTd[:, :, :] = aData[i][:, :, :]
     rootgrp.close()
 
@@ -62,12 +62,12 @@ def writeNetcdf4Paraview(sname, x, y, z, aName, aData):
 #     rootgrp.close()
 
 
-x = np.linspace(-50000, 50000, int((50000 + 50000) / 100))
+x = np.linspace(-50000, 50000, int((50000 + 50000) / 100) + 1)  # for testing if correct
 y = np.linspace(0, 10000, int(10000 / 100))
-z = np.linspace(-50000, 50000, int((50000+50000) / 100))
+z = np.linspace(-50000, 50000, int((50000 + 50000) / 100))
 
 # Generate a Gaussian shaped slip distribution for illustration purposes
-xg, yg, zg = np.meshgrid(x, y, z)
+xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
 Rx = np.zeros(xg.shape)
 Rz = np.zeros(xg.shape)
 
