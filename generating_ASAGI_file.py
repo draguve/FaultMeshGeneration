@@ -29,37 +29,40 @@ def writeNetcdf4Paraview(sname, x, y, z, aName, aData):
     rootgrp.close()
 
 
-# def writeNetcdf4SeisSol(sname, x, y, aName, aData):
-#     "create a netcdf file readable by ASAGI (but not by paraview)"
-#     ########## creating the file for SeisSol
-#     fname = sname + "_ASAGI.nc"
-#     print("writing " + fname)
-#     ####Creating the netcdf file
-#     nx = x.shape[0]
-#     ny = y.shape[0]
-#
-#     rootgrp = Dataset(fname, "w", format="NETCDF4")
-#
-#     rootgrp.createDimension("u", nx)
-#     rootgrp.createDimension("v", ny)
-#
-#     vx = rootgrp.createVariable("u", "f4", ("u",))
-#     vx[:] = x
-#     vy = rootgrp.createVariable("v", "f4", ("v",))
-#     vy[:] = y
-#     ldata4 = [(name, "f4") for name in aName]
-#     ldata8 = [(name, "f8") for name in aName]
-#     mattype4 = np.dtype(ldata4)
-#     mattype8 = np.dtype(ldata8)
-#     mat_t = rootgrp.createCompoundType(mattype4, "material")
-#
-#     # this transform the 4 D array into an array of tuples
-#     arr = np.stack([aData[i] for i in range(len(aName))], axis=2)
-#     newarr = arr.view(dtype=mattype8)
-#     newarr = newarr.reshape(newarr.shape[:-1])
-#     mat = rootgrp.createVariable("data", mat_t, ("v", "u"))
-#     mat[:] = newarr
-#     rootgrp.close()
+def writeNetcdf4SeisSol(sname, x, y, z, aName, aData):
+    # "create a netcdf file readable by ASAGI (but not by paraview)"
+    # creating the file for SeisSol
+    fname = sname + "_ASAGI.nc"
+    print("writing " + fname)
+    # Creating the netcdf file
+    nx = x.shape[0]
+    ny = y.shape[0]
+    nz = z.shape[0]
+    rootgrp = Dataset(fname, "w", format="NETCDF4")
+
+    rootgrp.createDimension("u", nx)
+    rootgrp.createDimension("v", ny)
+    rootgrp.createDimension("w", nz)
+
+    vx = rootgrp.createVariable("u", "f4", ("u",))
+    vx[:] = x
+    vy = rootgrp.createVariable("v", "f4", ("v",))
+    vy[:] = y
+    vz = rootgrp.createVariable("w", "f4", ("w",))
+    vz[:] = z
+    ldata4 = [(name, "f4") for name in aName]
+    ldata8 = [(name, "f8") for name in aName]
+    mattype4 = np.dtype(ldata4)
+    mattype8 = np.dtype(ldata8)
+    mat_t = rootgrp.createCompoundType(mattype4, "material")
+
+    # this transform the 4 D array into an array of tuples
+    arr = np.stack([aData[i] for i in range(len(aName))], axis=3)
+    newarr = arr.view(dtype=mattype8)
+    newarr = newarr.reshape(newarr.shape[:-1])
+    mat = rootgrp.createVariable("data", mat_t, ("u", "v", "w"))
+    mat[:] = newarr
+    rootgrp.close()
 
 
 x = np.linspace(-50000, 50000, int((50000 + 50000) / 100) + 1)  # for testing if correct
@@ -99,4 +102,4 @@ ldataName = ["sheer_stress"]
 lgridded_myData = [sheer_stress]
 
 writeNetcdf4Paraview(prefix, x, y, z, ldataName, lgridded_myData)
-# writeNetcdf4SeisSol(prefix, x, y, ldataName, lgridded_myData)
+writeNetcdf4SeisSol(prefix, x, y, z, ldataName, lgridded_myData)
