@@ -20,7 +20,9 @@ def main(
         point_field_resolution: Annotated[
             float, typer.Option(help="Resolution for netcdf files (in m)")] = 100,
         output_distance_from_faults: Annotated[
-            str, typer.Option(help="Generate netcdf file for distance from fault points")] = None
+            str, typer.Option(help="Generate netcdf file for distance from fault points")] = None,
+        output_distance_from_topo: Annotated[
+            str, typer.Option(help="Generate netcdf file for distance from topography points")] = None
 ):
     with h5py.File(meta_file, "r") as f:
         closest_point = np.array([long, lat, 0])
@@ -37,27 +39,36 @@ def main(
         cart = apply_rotation_points(cart, rotation_matrix)
         cart = apply_centering_points(cart, center)
 
-        if output_distance_from_faults is not None:
+        if output_distance_from_faults is not None or output_distance_from_topo is not None:
             if f.get("bounding_box") is None:
                 print("Could not find bounding box in meta file, create bounding box with mesh")
                 exit()
 
-            print("generating KDTree")
-            fault_tree = KDTree(f["fault_points"][:])
-
+            print("generating bounding box")
             bounding_box = f.get("bounding_box")[:]
             min_coords = np.min(bounding_box, axis=0)
             max_coords = np.max(bounding_box, axis=0)
 
-            x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / point_field_resolution) + 1)
-            y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / point_field_resolution)+ 2)
-            z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / point_field_resolution)+ 3)
+            x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / point_field_resolution))
+            y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / point_field_resolution))
+            z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / point_field_resolution))
 
             xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
-            distances, index = fault_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
-            distances = distances.squeeze().reshape(xg.shape)
-            distances = np.einsum('ijk->kji', distances)
-            writeNetcdf4Paraview(output_distance_from_faults, z, y, x, ["fault_distance"], [distances])
+            if output_distance_from_faults is not None:
+                print("generating fault KDTree")
+                fault_tree = KDTree(f["fault_points"][:])
+                distances, index = fault_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
+                distances = distances.squeeze().reshape(xg.shape)
+                distances = np.einsum('ijk->kji', distances)
+                writeNetcdf4Paraview(output_distance_from_faults, z, y, x, ["fault_distance"], [distances])
+            if output_distance_from_topo is not None:
+                print("generating topography KDTree")
+                topo_tree = KDTree(f["topo_points"][:])
+                distances, index = topo_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
+                distances = distances.squeeze().reshape(xg.shape)
+                distances = np.einsum('ijk->kji', distances)
+                writeNetcdf4Paraview(output_distance_from_topo, z, y, x, ["topo_distance"], [distances])
+
         print(f"Location of the point is {cart}")
 
 

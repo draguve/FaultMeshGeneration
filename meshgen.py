@@ -485,9 +485,9 @@ def main(
         bb_mesh_size: Annotated[
             float, typer.Option(help="size of the bounding box mesh (in m)",
                                 rich_help_panel="Bounding Box Options")] = 500,
-        bb_depth_below_topography: Annotated[
+        bb_depth_below_fault: Annotated[
             float, typer.Option(help="How deep bounding box be from the topography(in Km)",
-                                rich_help_panel="Bounding Box Options")] = 5,
+                                rich_help_panel="Bounding Box Options")] = 2,
         bb_height_above_topography: Annotated[
             float, typer.Option(help="How high bounding box be above the topography(in Km)",
                                 rich_help_panel="Bounding Box Options")] = 0.5,
@@ -577,6 +577,7 @@ def main(
     topograph_points = apply_rotation_points(topograph_points, rotation_matrix)
     center = get_center(topograph_points)
     topograph_points = apply_centering_points(topograph_points, center)
+    top_topo_points_only = topograph_points
     topo_surface = None
     if topo_solver == TopographySolver.scipy:
         # Perform PCA to reduce to 2D
@@ -667,7 +668,7 @@ def main(
         ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
         ps = gmsh.model.geo.addPlaneSurface([ll])
 
-        gmsh.model.geo.extrude([(2, ps)], 0, 0, -bb_depth_below_topography * 1000)
+        gmsh.model.geo.extrude([(2, ps)], 0, 0, -(bb_depth_below_fault + fault_depth) * 1000)
         gmsh.model.geo.synchronize()
         gmsh.model.mesh.generate(2)
 
@@ -750,7 +751,7 @@ def main(
             fault_input = np.array(to_generate)
             dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
             dset[:] = fault_input
-
+            hf.create_dataset("topo_points", data=top_topo_points_only)
             hf.create_dataset("all_long_lats", data=all_long_lats)
             hf.create_dataset("fault_points", data=np.vstack(all_wall_points))
             if bounding_box_points is not None:
