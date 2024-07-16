@@ -56,8 +56,8 @@ def main(
             xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
             distances, index = fault_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
             distances = distances.squeeze().reshape(xg.shape)
-
-            writeNetcdf4Paraview(output_distance_from_faults, x, y, z, ["fault_distance"], [distances])
+            distances = np.einsum('ijk->kji', distances)
+            writeNetcdf4Paraview(output_distance_from_faults, z, y, x, ["fault_distance"], [distances])
         print(f"Location of the point is {cart}")
 
 
