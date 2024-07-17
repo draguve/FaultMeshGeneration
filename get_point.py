@@ -4,8 +4,32 @@ import typer
 from scipy.spatial import KDTree
 from typing_extensions import Annotated
 from generating_ASAGI_file import writeNetcdf4SeisSol, writeNetcdf4Paraview
-
+from netCDF4 import Dataset
 from meshgen import get_cartesian, apply_centering_points, apply_rotation_points
+from tqdm import tqdm
+
+
+def createNetcdf4ParaviewHandle(sname, x, y, z, aName):
+    "create a netcdf file readable by paraview (but not by ASAGI)"
+    fname = sname + "_paraview.nc"
+    # print("writing " + fname)
+    # Creating the netcdf file
+    nx = x.shape[0]
+    ny = y.shape[0]
+    nz = z.shape[0]
+    rootgrp = Dataset(fname, "w", format="NETCDF4")
+    rootgrp.createDimension("u", nx)
+    rootgrp.createDimension("v", ny)
+    rootgrp.createDimension("w", nz)
+
+    vx = rootgrp.createVariable("u", "f4", ("u",))
+    vx[:] = x
+    vy = rootgrp.createVariable("v", "f4", ("v",))
+    vy[:] = y
+    vz = rootgrp.createVariable("w", "f4", ("w",))
+    vz[:] = z
+    vTd = rootgrp.createVariable(aName, "f4", ("u", "v", "w"))
+    return rootgrp, vTd
 
 
 def main(
@@ -22,7 +46,9 @@ def main(
         output_distance_from_faults: Annotated[
             str, typer.Option(help="Generate netcdf file for distance from fault points")] = None,
         output_distance_from_topo: Annotated[
-            str, typer.Option(help="Generate netcdf file for distance from topography points")] = None
+            str, typer.Option(help="Generate netcdf file for distance from topography points")] = None,
+        chunk_size: Annotated[
+            int, typer.Option(help="Size of chunks while generating")] = 50
 ):
     with h5py.File(meta_file, "r") as f:
         closest_point = np.array([long, lat, 0])
@@ -38,6 +64,7 @@ def main(
         cart = get_cartesian(lat_deg=closest_point[1], lon_deg=closest_point[0], alt=depth)
         cart = apply_rotation_points(cart, rotation_matrix)
         cart = apply_centering_points(cart, center)
+        print(f"Location of the point is {cart}")
 
         if output_distance_from_faults is not None or output_distance_from_topo is not None:
             if f.get("bounding_box") is None:
@@ -57,19 +84,69 @@ def main(
             if output_distance_from_faults is not None:
                 print("generating fault KDTree")
                 fault_tree = KDTree(f["fault_points"][:])
-                distances, index = fault_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
-                distances = distances.squeeze().reshape(xg.shape)
-                distances = np.einsum('ijk->kji', distances)
-                writeNetcdf4Paraview(output_distance_from_faults, z, y, x, ["fault_distance"], [distances])
+
+                rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_faults, z, y, x, "fault_distance")
+                total_iterations = (len(x) // chunk_size + 1) * (len(y) // chunk_size + 1) * (len(z) // chunk_size + 1)
+                progress_bar = tqdm(total=total_iterations, desc="Generating fault_distance")
+
+                # Loop over the grid in chunks
+                for i in range(0, len(x), chunk_size):
+                    for j in range(0, len(y), chunk_size):
+                        for k in range(0, len(z), chunk_size):
+                            x_chunk = x[i:i + chunk_size]
+                            y_chunk = y[j:j + chunk_size]
+                            z_chunk = z[k:k + chunk_size]
+
+                            xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
+
+                            # Query the fault tree
+                            sub_distances, index = fault_tree.query(
+                                np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
+                            sub_distances = sub_distances.squeeze().reshape(xg.shape)
+                            sub_distances = np.einsum('ijk->kji', sub_distances)
+
+                            # Store the results in the appropriate slice of the distances array
+                            vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = sub_distances
+
+                            # Update tqdm progress bar
+                            progress_bar.update(1)
+
+                # Close tqdm progress bar
+                progress_bar.close()
+                rootgrp.close()
+
             if output_distance_from_topo is not None:
                 print("generating topography KDTree")
                 topo_tree = KDTree(f["topo_points"][:])
-                distances, index = topo_tree.query(np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
-                distances = distances.squeeze().reshape(xg.shape)
-                distances = np.einsum('ijk->kji', distances)
-                writeNetcdf4Paraview(output_distance_from_topo, z, y, x, ["topo_distance"], [distances])
 
-        print(f"Location of the point is {cart}")
+                rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_topo, z, y, x, "topo_distance")
+                total_iterations = (len(x) // chunk_size + 1) * (len(y) // chunk_size + 1) * (len(z) // chunk_size + 1)
+                progress_bar = tqdm(total=total_iterations, desc="Generating topo_distance")
+
+                for i in range(0, len(x), chunk_size):
+                    for j in range(0, len(y), chunk_size):
+                        for k in range(0, len(z), chunk_size):
+                            x_chunk = x[i:i + chunk_size]
+                            y_chunk = y[j:j + chunk_size]
+                            z_chunk = z[k:k + chunk_size]
+
+                            xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
+
+                            # Query the fault tree
+                            sub_distances, index = topo_tree.query(
+                                np.stack((xg.flatten(), yg.flatten(), zg.flatten())).T, k=[1])
+                            sub_distances = sub_distances.squeeze().reshape(xg.shape)
+                            sub_distances = np.einsum('ijk->kji', sub_distances)
+
+                            # Store the results in the appropriate slice of the distances array
+                            vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = sub_distances
+
+                            # Update tqdm progress bar
+                            progress_bar.update(1)
+
+                # Close tqdm progress bar
+                progress_bar.close()
+                rootgrp.close()
 
 
 if __name__ == "__main__":
