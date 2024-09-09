@@ -112,8 +112,7 @@ def generate_catmull_rom(points):
 
 def main(
         input_filename: Annotated[str, typer.Argument(help="Path for a csv file, containing the input")],
-        csv_output: Annotated[str, typer.Option(help="Output csv")] = "output.csv",
-        disable_csv: Annotated[bool, typer.Option(help="Disable saving the output file")] = False,
+        csv_output: Annotated[str, typer.Option(help="Output csv")] = "",
         plot: Annotated[bool, typer.Option(help="Show final fault before saving")] = False,
         kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
         disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False
@@ -178,7 +177,7 @@ def main(
             f.write(k.to_string(prettyprint=True))
 
     # write csv
-    if not disable_csv:
+    if csv_output != "":
         with open(csv_output, 'w', newline="") as file:
             csvwriter = csv.writer(file)
             csvwriter.writerow(["ID", "Name", "Geom"])
