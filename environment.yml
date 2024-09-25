@@ -1,0 +1,23 @@
+name: geo
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - numpy
+  - scipy
+  - jupyterlab
+  - pyvista
+  - h5py
+  - py3dep
+  - pandas
+  - conda-forge::typer
+  - scikit-image
+  - tqdm
+  - conda-forge::scikit-learn
+  - conda-forge::gmsh
+  - conda-forge::fastkml
+  - conda-forge::shapely
+  - conda-forge::matplotlib
+  - conda-forge::folium
+  - conda-forge::netcdf4
+prefix: C:\Users\ritwi\.conda\envs\geo
