@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import csv
 import typer
 from typing_extensions import Annotated
+from geopy import distance
 
 QUADRUPLE_SIZE = 4
 
@@ -68,13 +69,17 @@ def flatten(list_of_lists):
     return [elem for lst in list_of_lists for elem in lst]
 
 
-def catmull_rom_spline(P0, P1, P2, P3, num_points, alpha=0.5):
+def catmull_rom_spline(P0, P1, P2, P3, distance_btw_points=1000, alpha=0.5):
     def tj(ti, pi, pj):
         xi, yi = pi
         xj, yj = pj
         dx, dy = xj - xi, yj - yi
         l = (dx ** 2 + dy ** 2) ** 0.5
         return ti + l ** alpha
+
+    distance_p1_p2 = distance.distance(P1[::-1],
+                                       P2[::-1]).m  # lat longs are for some reason stored in reverse in the strings
+    num_points = math.ceil(distance_p1_p2 / distance_btw_points)
 
     t0 = 0.0
     t1 = tj(t0, P0, P1)
@@ -91,19 +96,19 @@ def catmull_rom_spline(P0, P1, P2, P3, num_points, alpha=0.5):
     return points
 
 
-def catmull_rom_chain(points, num_points):
+def catmull_rom_chain(points, distance_btw_points=1000, cat_mull_room_alpha=0.5):
     point_quadruples = ((points[idx + d] for d in range(QUADRUPLE_SIZE)) for idx in range(num_segments(points)))
-    all_splines = (catmull_rom_spline(*pq, num_points) for pq in point_quadruples)
+    all_splines = (catmull_rom_spline(*pq, distance_btw_points, alpha=cat_mull_room_alpha) for pq in point_quadruples)
     return flatten(all_splines)
 
 
-def generate_catmull_rom(points):
+def generate_catmull_rom(points, distance_btw_points, cat_mull_room_alpha):
     start_point = mirror_point(points[1], points[0])
     end_point = mirror_point(points[-2], points[-1])
     extended_points = np.vstack((start_point, points, end_point))
-    NUM_POINTS = 100
-    chain_points = catmull_rom_chain(extended_points[:, 0:2], NUM_POINTS)
-    assert len(chain_points) == num_segments(extended_points[:, 0:2]) * NUM_POINTS
+    chain_points = catmull_rom_chain(extended_points[:, 0:2], distance_btw_points=distance_btw_points,
+                                     cat_mull_room_alpha=cat_mull_room_alpha)
+    # assert len(chain_points) == num_segments(extended_points[:, 0:2]) * NUM_POINTS
     chain_points = np.vstack(chain_points)
     z = np.zeros((len(chain_points), 1), dtype=chain_points.dtype)
     chain_points = np.hstack((chain_points, z))
@@ -112,11 +117,13 @@ def generate_catmull_rom(points):
 
 def main(
         input_filename: Annotated[str, typer.Argument(help="Path for a csv file, containing the input")],
-        csv_output: Annotated[str, typer.Option(help="Output csv")] = "output.csv",
-        disable_csv: Annotated[bool, typer.Option(help="Disable saving the output file")] = False,
+        csv_output: Annotated[str, typer.Option(help="Output csv")] = "",
         plot: Annotated[bool, typer.Option(help="Show final fault before saving")] = False,
         kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
-        disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False
+        disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False,
+        resolution: Annotated[int, typer.Option(
+            help="Distance(in m) between the points when using smoothing/Resolution of smoothed output")] = 1000,
+        cat_mull_room_alpha: Annotated[float, typer.Option(help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5
 ):
     data = read_csv(input_filename)
     lines = {}
@@ -134,6 +141,7 @@ def main(
         lines[id][location] = row
 
     outputs = []
+    final_num_points = 0
     for name, paths in lines.items():
         order = list(paths.keys())
         order.sort()
@@ -153,15 +161,18 @@ def main(
         if disable_smoothing:
             extended_points, catmull = None, all_points
         else:
-            extended_points, catmull = generate_catmull_rom(all_points)
+            extended_points, catmull = generate_catmull_rom(all_points, resolution, cat_mull_room_alpha)
+        final_num_points += catmull.shape[0]
         outputs.append([id, name, "", all_points, extended_points, catmull])
+    print(f"Final paths have {final_num_points} points")
 
     if plot:
         for output in outputs:
-            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-")
+            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-", label="Raw input", linewidth=0.5)
             if not disable_smoothing:
-                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
+                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5, label="Smoothed")
                 plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
+        plt.legend(loc="upper right")
         plt.show()
 
     # Create a KML document
@@ -178,7 +189,7 @@ def main(
             f.write(k.to_string(prettyprint=True))
 
     # write csv
-    if not disable_csv:
+    if csv_output != "":
         with open(csv_output, 'w', newline="") as file:
             csvwriter = csv.writer(file)
             csvwriter.writerow(["ID", "Name", "Geom"])
