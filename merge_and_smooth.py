@@ -123,7 +123,8 @@ def main(
         disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False,
         resolution: Annotated[int, typer.Option(
             help="Distance(in m) between the points when using smoothing/Resolution of smoothed output")] = 1000,
-        cat_mull_room_alpha: Annotated[float, typer.Option(help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5
+        cat_mull_room_alpha: Annotated[float, typer.Option(
+            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5
 ):
     data = read_csv(input_filename)
     lines = {}
@@ -168,11 +169,16 @@ def main(
 
     if plot:
         for output in outputs:
-            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-", label="Raw input", linewidth=0.5)
+            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-", linewidth=0.5)
             if not disable_smoothing:
-                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5, label="Smoothed")
+                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
                 plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
-        plt.legend(loc="upper right")
+
+        # legend hack
+        plt.plot([], [], 'red', label="Smoothed")
+        plt.plot([], [], 'blue', label="Raw input")
+
+        plt.legend(loc='best')
         plt.show()
 
     # Create a KML document

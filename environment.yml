@@ -20,4 +20,5 @@ dependencies:
   - conda-forge::matplotlib
   - conda-forge::folium
   - conda-forge::netcdf4
+  - conda-forge::geopy
 prefix: C:\Users\ritwi\.conda\envs\geo
