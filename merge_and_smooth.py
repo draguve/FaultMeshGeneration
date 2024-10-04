@@ -124,7 +124,10 @@ def main(
         resolution: Annotated[int, typer.Option(
             help="Distance(in m) between the points when using smoothing/Resolution of smoothed output")] = 1000,
         cat_mull_room_alpha: Annotated[float, typer.Option(
-            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5
+            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5,
+        remove_close_points: Annotated[bool, typer.Option(help="Remove points if they're too close")] = True,
+        remove_threshold: Annotated[float, typer.Option(help="Threshold for removing points in m")] = 5.0,
+        print_distance: Annotated[bool, typer.Option(help="Print distance's between the points")] = False,
 ):
     data = read_csv(input_filename)
     lines = {}
@@ -163,9 +166,39 @@ def main(
             extended_points, catmull = None, all_points
         else:
             extended_points, catmull = generate_catmull_rom(all_points, resolution, cat_mull_room_alpha)
+            catmull = catmull[0:-2]
         final_num_points += catmull.shape[0]
         outputs.append([id, name, "", all_points, extended_points, catmull])
     print(f"Final paths have {final_num_points} points")
+
+    if remove_close_points:
+        deleted_points = 0
+        for output in outputs:
+            indexes = [0, ]
+            last_added = 0
+            rom = output[-1]
+            for i in range(1, rom.shape[0]):
+                p1 = rom[last_added][0:2]
+                p2 = rom[i][0:2]
+                distance_p1_p2 = distance.distance(p1[::-1], p2[::-1]).m
+                if distance_p1_p2 > remove_threshold:
+                    indexes.append(i)
+                    last_added = i
+                else:
+                    deleted_points += 1
+            indexes = np.array(indexes)
+            output[-1] = output[-1][indexes]
+        print(f"Deleted {deleted_points} points for being too close")
+
+    # Print Distance between points
+    if print_distance:
+        for output in outputs:
+            rom = output[-1]
+            for i in range(1, rom.shape[0]):
+                p1 = rom[i - 1][0:2]
+                p2 = rom[i][0:2]
+                distance_p1_p2 = distance.distance(p1[::-1], p2[::-1]).m
+                print(distance_p1_p2)
 
     if plot:
         for output in outputs:

@@ -14,11 +14,13 @@ dependencies:
   - scikit-image
   - tqdm
   - conda-forge::scikit-learn
-  - conda-forge::gmsh
   - conda-forge::fastkml
   - conda-forge::shapely
   - conda-forge::matplotlib
   - conda-forge::folium
   - conda-forge::netcdf4
   - conda-forge::geopy
+  - gmsh
+  - conda-forge::python-gmsh
+  - conda-forge::meshio
 prefix: C:\Users\ritwi\.conda\envs\geo
