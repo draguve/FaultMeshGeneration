@@ -533,6 +533,7 @@ def main(
 
     all_long_lats = np.vstack(all_lat_longs)
     bounding_box = generate_extended_bounding_box(all_long_lats, surrounding_region)
+    lat_long_bb = bounding_box
     dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
     dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
     if just_check_res:
@@ -751,6 +752,7 @@ def main(
             fault_input = np.array(to_generate)
             dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
             dset[:] = fault_input
+            hf.create_dataset("bounding_box_lat_long",data=lat_long_bb)
             hf.create_dataset("topo_points", data=top_topo_points_only)
             hf.create_dataset("all_long_lats", data=all_long_lats)
             hf.create_dataset("fault_points", data=np.vstack(all_wall_points))
