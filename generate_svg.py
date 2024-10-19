@@ -30,8 +30,7 @@ def main(input_filename="outputs/BayModel1/merged_catmul_500m_a0.5.csv",
     proj = Proj(proj='utm', zone=get_utm_zone(bl_lon), ellps='WGS84', preserve_units=False)
     utm_bl_x, utm_bl_y = proj(bl_lon, bl_lat)
 
-
-    fig = plt.figure(frameon=False,figsize=(10,10*((utm_tr_x - utm_bl_x) / (utm_tr_y - utm_bl_y))))
+    fig = plt.figure(frameon=False, figsize=(5, 5 * ((utm_tr_x - utm_bl_x) / (utm_tr_y - utm_bl_y))))
     ax = fig.add_axes([0, 0, 1, 1])
 
     for line in data:
@@ -44,7 +43,7 @@ def main(input_filename="outputs/BayModel1/merged_catmul_500m_a0.5.csv",
             x, y = proj(lon_lat[0], lon_lat[1])
             utm_x.append(x)
             utm_y.append(y)
-            plt.plot(utm_x, utm_y, marker='o', linestyle='-')
+        plt.plot(utm_x, utm_y, marker='o', linestyle='-')
 
     plt.title('Projected UTM Coordinates')
     plt.xlabel('UTM Easting (m)')
@@ -56,7 +55,7 @@ def main(input_filename="outputs/BayModel1/merged_catmul_500m_a0.5.csv",
     # plt.gca().set_aspect((utm_tr_x - utm_bl_x) / (utm_tr_y - utm_bl_y))
 
     # Remove grid, legend, and borders
-    plt.axis('off')  # Turn off the axis
+    # plt.axis('off')  # Turn off the axis
 
     # Save the plot as an SVG file
     plt.savefig('utm_coordinates_plot.svg', format='svg')
