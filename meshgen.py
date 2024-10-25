@@ -452,7 +452,7 @@ def main(
 
         # Options about fault
         fault_output: Annotated[
-            str, typer.Option(help="Fault output filepath", rich_help_panel="Fault Options")] = None,
+            str, typer.Option(help="Fault output filepath (needs to be a folder when splitting to multiple files)", rich_help_panel="Fault Options")] = None,
         fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography",
                                                   rich_help_panel="Fault Options")] = 2,
         fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography",
@@ -461,7 +461,7 @@ def main(
             float, typer.Option(help="How big should the triangles in the fault be (in m)",
                                 rich_help_panel="Fault Options")] = 50,
         split_to_multiple_files: Annotated[
-            str, typer.Option(help="Split faults into multiple files", rich_help_panel="Fault Options")] = False,
+            bool, typer.Option(help="Split faults into multiple files", rich_help_panel="Fault Options")] = False,
 
         # Options about topography
         topography_output: Annotated[str, typer.Option(help="Topography output filepath",
@@ -567,6 +567,13 @@ def main(
 
     for record in to_generate:
         lat_longs = get_points(record)
+        if len(lat_longs)==2:
+            print(f"adding extra point for {record[0]}")
+            midpoint = (lat_longs[0] + lat_longs[1]) / 2
+            lat_longs = np.insert(lat_longs, 1, midpoint, axis=0)
+        if len(lat_longs)<2:
+            print(f"Check input file, {record[0]} has only {len(lat_longs)} points")
+            exit()
         all_lat_longs.append(lat_longs)
 
     all_long_lats = np.vstack(all_lat_longs)
@@ -748,7 +755,7 @@ def main(
             topo_mesh.write(topography_output)
         if fault_output is not None:
             if split_to_multiple_files:
-                #ensure the location is the name of a folder
+                # ensure the location is the name of a folder
                 create_folder_if_valid(fault_output)
 
                 for i, wall in tqdm(enumerate(individual_wall_meshes), desc="Saving faults"):
@@ -792,7 +799,7 @@ def main(
         with h5py.File(f'{meta_data_output}.h5', 'w') as hf:
             hf.create_dataset('center', data=center)
             hf.create_dataset('rotation_matrix', data=rotation_matrix)
-
+            hf.create_dataset("bounding_box", np.array(bounding_box))
             meta = hf.create_group("meta")
             meta.attrs["input_command"] = " ".join(sys.argv)
 
