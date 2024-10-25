@@ -16,6 +16,24 @@ from skimage.util.shape import view_as_windows
 from sklearn.decomposition import PCA
 from tqdm import tqdm
 from typing_extensions import Annotated
+from pathlib import Path
+
+
+def create_folder_if_valid(path_string):
+    # Convert the string to a Path object
+    folder_path = Path(path_string)
+
+    try:
+        # Check if the path is a valid directory path
+        if not folder_path.suffix:  # Folders generally do not have a suffix like ".txt"
+            # If the path is valid and doesn't exist, create the folder
+            folder_path.mkdir(parents=True, exist_ok=True)
+            print(f"Folder created or already exists at: {folder_path}")
+        else:
+            raise ValueError("The path provided is not a valid directory path.")
+
+    except Exception as e:
+        print(f"Error: {e}")
 
 
 def strided4D(arr, arr2, s):
@@ -442,6 +460,8 @@ def main(
         fault_resolution: Annotated[
             float, typer.Option(help="How big should the triangles in the fault be (in m)",
                                 rich_help_panel="Fault Options")] = 50,
+        split_to_multiple_files: Annotated[
+            str, typer.Option(help="Split faults into multiple files", rich_help_panel="Fault Options")] = False,
 
         # Options about topography
         topography_output: Annotated[str, typer.Option(help="Topography output filepath",
@@ -494,6 +514,21 @@ def main(
         plot_bb: Annotated[
             bool, typer.Option(help="Show bounding box in gmsh ui before saving",
                                rich_help_panel="Bounding Box Options")] = False,
+        force_bb_location: Annotated[
+            bool, typer.Option(help="Force the bb location instead of generating from surrounding region",
+                               rich_help_panel="Bounding Box Options")] = False,
+        min_bb_lat: Annotated[
+            float, typer.Option(help="When forcing bb location min bb lat",
+                                rich_help_panel="Bounding Box Options")] = 34.154799999999994,
+        max_bb_lat: Annotated[
+            float, typer.Option(help="When forcing bb location max bb lat",
+                                rich_help_panel="Bounding Box Options")] = 41.208890000000004,
+        min_bb_long: Annotated[
+            float, typer.Option(help="When forcing bb location min bb long",
+                                rich_help_panel="Bounding Box Options")] = -125.14526000000001,
+        max_bb_long: Annotated[
+            float, typer.Option(help="When forcing bb location max bb long",
+                                rich_help_panel="Bounding Box Options")] = -119.00254,
 
         # Misc
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh",
@@ -520,6 +555,9 @@ def main(
             print("Using Fast Path")
             fast_path = True
 
+    if split_to_multiple_files and not fast_path:
+        print("Cannot split walls into multiple files without fast path")
+
     to_generate = read_csv(input_file)
     num_walls = len(to_generate)
     all_lat_longs = []
@@ -532,8 +570,12 @@ def main(
         all_lat_longs.append(lat_longs)
 
     all_long_lats = np.vstack(all_lat_longs)
-    bounding_box = generate_extended_bounding_box(all_long_lats, surrounding_region)
+    if force_bb_location:
+        bounding_box = [min_bb_lat, max_bb_lat, min_bb_long, max_bb_long]
+    else:
+        bounding_box = generate_extended_bounding_box(all_long_lats, surrounding_region)
     lat_long_bb = bounding_box
+    print(bounding_box)
     dep3_bounding_box = get_3dep_bbox(bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3])
     dem_res = py3dep.check_3dep_availability(dep3_bounding_box)
     if just_check_res:
@@ -600,7 +642,7 @@ def main(
         topo_points = pv.PolyData(topograph_points)
         topo_surface = topo_points.delaunay_2d(progress_bar=True)
 
-    if extrude_surface_to_depth != 0.0:
+    if extrude_surface_to_depth > 0:
         if extrusion_solver == ExtrusionSolver.pyvista:
             plane = pv.Plane(
                 center=(topo_surface.center[0], topo_surface.center[1], -extrude_surface_to_depth * 1000),
@@ -620,6 +662,7 @@ def main(
                     topo_surface = pv.PolyData(topograph_points, custom_connectivity)
 
     print(f"Generating faults for {len(to_generate)} sections")
+    individual_wall_meshes = []
     all_wall_meshes = pv.MultiBlock()
     # for fast path
     accumulated_num_points = 0
@@ -629,14 +672,16 @@ def main(
         wall_points, wall_connectivity = create_wall(all_lat_longs[i], rotation_matrix, center, up_diff=fault_height,
                                                      down_diff=fault_depth, step_size=fault_resolution)
         all_wall_points.append(wall_points)
-        if not fast_path:
-            wall = pv.PolyData(wall_points, wall_connectivity)
-            all_wall_meshes.append(wall)
-        else:
+        wall = pv.PolyData(np.array(wall_points, copy=True), np.array(wall_connectivity, copy=True))
+        if fast_path:
             wall_triangles = wall_connectivity.reshape(-1, 4)[:, 1:]
             wall_triangles = wall_triangles + accumulated_num_points
             all_wall_connectivity.append(wall_triangles)
             accumulated_num_points = accumulated_num_points + wall_points.shape[0]
+            if split_to_multiple_files:
+                individual_wall_meshes.append(wall)
+        else:
+            all_wall_meshes.append(wall)
 
     bounding_box_points = None
     if bounding_box_output is not None:
@@ -702,15 +747,22 @@ def main(
             )
             topo_mesh.write(topography_output)
         if fault_output is not None:
-            print(f"Saving faults : {fault_output}")
-            fault_cells = [
-                ("triangle", np.vstack(all_wall_connectivity)),
-            ]
-            fault_mesh = meshio.Mesh(
-                np.vstack(all_wall_points),
-                fault_cells
-            )
-            fault_mesh.write(fault_output)
+            if split_to_multiple_files:
+                #ensure the location is the name of a folder
+                create_folder_if_valid(fault_output)
+
+                for i, wall in tqdm(enumerate(individual_wall_meshes), desc="Saving faults"):
+                    pv.save_meshio(f"{fault_output}/{to_generate[i][0]}.stl", wall)
+            else:
+                print(f"Saving faults : {fault_output}")
+                fault_cells = [
+                    ("triangle", np.vstack(all_wall_connectivity)),
+                ]
+                fault_mesh = meshio.Mesh(
+                    np.vstack(all_wall_points),
+                    fault_cells
+                )
+                fault_mesh.write(fault_output)
     else:
         if plot:
             plotter = pv.Plotter()
@@ -752,7 +804,7 @@ def main(
             fault_input = np.array(to_generate)
             dset = hf.create_dataset('fault_input', fault_input.shape, dtype=dt)
             dset[:] = fault_input
-            hf.create_dataset("bounding_box_lat_long",data=lat_long_bb)
+            hf.create_dataset("bounding_box_lat_long", data=lat_long_bb)
             hf.create_dataset("topo_points", data=top_topo_points_only)
             hf.create_dataset("all_long_lats", data=all_long_lats)
             hf.create_dataset("fault_points", data=np.vstack(all_wall_points))
