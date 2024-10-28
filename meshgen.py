@@ -799,7 +799,7 @@ def main(
         with h5py.File(f'{meta_data_output}.h5', 'w') as hf:
             hf.create_dataset('center', data=center)
             hf.create_dataset('rotation_matrix', data=rotation_matrix)
-            hf.create_dataset("bounding_box", np.array(bounding_box))
+            hf.create_dataset("bounding_box_latlongs", data=np.array(bounding_box))
             meta = hf.create_group("meta")
             meta.attrs["input_command"] = " ".join(sys.argv)
 
