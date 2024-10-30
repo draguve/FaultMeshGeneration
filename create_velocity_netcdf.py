@@ -9,7 +9,8 @@ from tqdm import tqdm
 from netCDF4 import Dataset
 
 meta_file = "outputs/BayModel1_final/meta.h5"
-model_file = "External/USGS_SFCVM_v21-0_detailed.h5"
+detail_model_file = "External/USGS_SFCVM_v21-0_detailed.h5"
+regional_model_file = "External/USGS_SFCVM_v21-0_regional.h5"
 output_distance_from_topo = "outputs/VelModelTest/data"
 point_field_resolution = 2000  #meter
 chunk_size = 50
@@ -71,7 +72,7 @@ def get_value(lat_longs):
             file.write(f"{lat}  {lon}  {alt}\n")
 
     subprocess.run(
-        ["geomodelgrids_query", f"--models={model_file}", f"--points={file_path}.in",
+        ["geomodelgrids_query", f"--models={detail_model_file},{regional_model_file}", f"--points={file_path}.in",
          f"--output={file_path}.out", "--values=Vp,Vs,Qp,Qs"])
     data = read_lat_lon_file(f"{file_path}.out")
     return data
