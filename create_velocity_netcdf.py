@@ -7,6 +7,7 @@ import shutil
 import subprocess
 from tqdm import tqdm
 from netCDF4 import Dataset
+from pathos.multiprocessing import ProcessPool
 
 meta_file = "outputs/BayModel1_final/meta.h5"
 detail_model_file = "External/USGS_SFCVM_v21-0_detailed.h5"
@@ -141,8 +142,24 @@ def createNetcdf4SeisSolHandle(sname, x, y, z, aName):
     vTd = rootgrp.createVariable("data", "f4", ("u", "v", "w"))
     return rootgrp, vTd
 
+def calculate_and_save(i,j,k,x_chunk,y_chunk,z_chunk):
+    xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
+    original_shape = xg.shape
+    points = np.stack([xg.flatten(), yg.flatten(), zg.flatten()]).T
+    latlongs = points_to_long_lat(points, center, rotation_matrix)
+    data = get_value(latlongs)
+    values = np.zeros((data.shape[0]))
+    for idx, row in enumerate(data):
+        values[idx] = row[3]
+    values = values.reshape(original_shape)
+    values = np.einsum('ijk->kji', values)
 
-with h5py.File(meta_file, "r") as f:
+    # vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
+    return i,j,k,values
+    # vTd_ss[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
+
+
+with h5py.File(meta_file, 'r') as f:
     center = f["center"][:]
     rotation_matrix = f["rotation_matrix"][:]
     bounding_box = f.get("bounding_box")[:]
@@ -153,43 +170,34 @@ with h5py.File(meta_file, "r") as f:
     y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / point_field_resolution))
     z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / point_field_resolution))
 
-    # latlong = points_to_long_lat(bounding_box, center, rotation_matrix)
-    # get_value(latlong)
+    idx = []
+    jdx = []
+    kdx = []
+    x_chunks = []
+    y_chunks = []
+    z_chunks = []
 
     rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_topo, z, y, x, "velocity")
-    # rootgrp_ss, vTd_ss = createNetcdf4SeisSolHandle(output_distance_from_topo, z, y, x, "velocity")
-
-    total_iterations = (len(x) // chunk_size + 1) * (len(y) // chunk_size + 1) * (len(z) // chunk_size + 1)
-    progress_bar = tqdm(total=total_iterations, desc="Generating fault_distance")
-
-    # Loop over the grid in chunks
     for i in range(0, len(x), chunk_size):
         for j in range(0, len(y), chunk_size):
             for k in range(0, len(z), chunk_size):
                 x_chunk = x[i:i + chunk_size]
                 y_chunk = y[j:j + chunk_size]
                 z_chunk = z[k:k + chunk_size]
+                idx.append(i)
+                jdx.append(j)
+                kdx.append(k)
+                x_chunks.append(x_chunk)
+                y_chunks.append(y_chunk)
+                z_chunks.append(z_chunk)
 
-                xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
-                original_shape = xg.shape
-                points = np.stack([xg.flatten(), yg.flatten(), zg.flatten()]).T
-                latlongs = points_to_long_lat(points, center, rotation_matrix)
-                data = get_value(latlongs)
-                values = np.zeros((data.shape[0]))
-                for idx, row in enumerate(data):
-                    values[idx] = row[3]
-                values = values.reshape(original_shape)
-                values = np.einsum('ijk->kji', values)
+    processPool = ProcessPool(nodes=4)
+    results = processPool.imap(calculate_and_save, idx, jdx, kdx,x_chunks,y_chunks,z_chunks)
 
-                vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
-                # vTd_ss[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
+    for result in tqdm(results, desc="Generating NetCDF", total=len(x_chunks)):
+        i,j,k,values = result
+        vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
 
-                # Update tqdm progress bar
-                progress_bar.update(1)
 
-    # Close tqdm progress bar
-    progress_bar.close()
     rootgrp.close()
-    # rootgrp_ss.close()
-
 shutil.rmtree(temp_dir)
