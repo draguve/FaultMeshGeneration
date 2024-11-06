@@ -30,6 +30,14 @@ def remove_duplicate_points(data):
     return unique_data
 
 
+def convert_from_multi_string(multi_line_string):
+    points = multi_line_string[17:-2].split(',')
+    lat_longs = []
+    for point in points:
+        lat_longs.append([float(x) for x in point.split(" ") if x])  # removes empty string
+    lat_longs = np.array(lat_longs)
+    return lat_longs
+
 def get_points(multi_line_string):
     # MULTILINESTRING((-121.5036249996688 37.03746799973482 0.0, -121.503775000355 37.03769099972591 0.0))
     points = multi_line_string[17:-2].split(',')  # remove the text
@@ -128,6 +136,7 @@ def main(
         remove_close_points: Annotated[bool, typer.Option(help="Remove points if they're too close")] = True,
         remove_threshold: Annotated[float, typer.Option(help="Threshold for removing points in m")] = 5.0,
         print_distance: Annotated[bool, typer.Option(help="Print distance's between the points")] = False,
+        force_plot_points: Annotated[str, typer.Option(help="Plot extra points")] = "",
 ):
     data = read_csv(input_filename)
     lines = {}
@@ -206,6 +215,12 @@ def main(
             if not disable_smoothing:
                 plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
                 plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
+
+        if force_plot_points != "":
+            extra_points = np.array(convert_from_multi_string(force_plot_points))
+            plt.plot(extra_points[:, 0], extra_points[:, 1], c="pink", linestyle="-", linewidth=0.5)
+            for i, data in enumerate(extra_points):
+                plt.text(data[0], data[1], f"Point {i}", fontsize=9, color='blue')
 
         # legend hack
         plt.plot([], [], 'red', label="Smoothed")
