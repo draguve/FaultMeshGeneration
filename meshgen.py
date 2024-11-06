@@ -124,16 +124,20 @@ def get_center(vertices):
     return np.average(vertices, axis=0)
 
 
-def get_points(record):
-    # last is long,lats
-    multi_line_string = record[-1][17:-2]
-    # MULTILINESTRING((-121.5036249996688 37.03746799973482 0.0, -121.503775000355 37.03769099972591 0.0))
-    points = multi_line_string.split(',')
+def convert_from_multi_string(multi_line_string):
+    points = multi_line_string[17:-2].split(',')
     lat_longs = []
     for point in points:
         lat_longs.append([float(x) for x in point.split(" ") if x])  # removes empty string
     lat_longs = np.array(lat_longs)
     return lat_longs
+
+
+def get_points(record):
+    # last is long,lats
+    multi_line_string = record[-1]
+    # MULTILINESTRING((-121.5036249996688 37.03746799973482 0.0, -121.503775000355 37.03769099972591 0.0))
+    return convert_from_multi_string(multi_line_string)
 
 
 def get_cartesian(lat_deg, lon_deg, alt):
@@ -452,7 +456,8 @@ def main(
 
         # Options about fault
         fault_output: Annotated[
-            str, typer.Option(help="Fault output filepath (needs to be a folder when splitting to multiple files)", rich_help_panel="Fault Options")] = None,
+            str, typer.Option(help="Fault output filepath (needs to be a folder when splitting to multiple files)",
+                              rich_help_panel="Fault Options")] = None,
         fault_height: Annotated[int, typer.Option(help="How high in Km should the fault be above topography",
                                                   rich_help_panel="Fault Options")] = 2,
         fault_depth: Annotated[int, typer.Option(help="How deep in Km should the fault be below topography",
@@ -529,7 +534,9 @@ def main(
         max_bb_long: Annotated[
             float, typer.Option(help="When forcing bb location max bb long",
                                 rich_help_panel="Bounding Box Options")] = -119.00254,
-
+        force_gmsh_bb: Annotated[
+            str, typer.Option(help="Force bounding box - ensure points are clockwise order",
+                              rich_help_panel="Bounding Box Options")] = "",
         # Misc
         plot: Annotated[bool, typer.Option(help="Show fault and topography mesh",
                                            rich_help_panel="Miscellaneous Options")] = False,
@@ -567,11 +574,11 @@ def main(
 
     for record in to_generate:
         lat_longs = get_points(record)
-        if len(lat_longs)==2:
+        if len(lat_longs) == 2:
             print(f"adding extra point for {record[0]}")
             midpoint = (lat_longs[0] + lat_longs[1]) / 2
             lat_longs = np.insert(lat_longs, 1, midpoint, axis=0)
-        if len(lat_longs)<2:
+        if len(lat_longs) < 2:
             print(f"Check input file, {record[0]} has only {len(lat_longs)} points")
             exit()
         all_lat_longs.append(lat_longs)
@@ -694,13 +701,28 @@ def main(
     if bounding_box_output is not None:
         print("Generating bounding box")
 
-        x_index = np.array([bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
-                            -bb_distance_from_topography - 1])
-        y_index = np.array([bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
-                            -bb_distance_from_topography - 1])
         height = np.max(diffs) + bb_height_above_topography * 1000
-        box_lats = lats[x_index, y_index]
-        box_longs = longs[x_index, y_index]
+
+        box_lats = None
+        box_longs = None
+        if force_gmsh_bb:
+            long_lats = convert_from_multi_string(force_gmsh_bb)
+            if len(long_lats) != 4:
+                print("force_gmsh_bb needs to have only 4 points")
+                exit()
+            long_lats = np.array(long_lats)
+            long_lats = long_lats[np.array([0, 1, 3, 2])]  #fix later stupidity/lazyness
+            box_lats = long_lats[:, 1]
+            box_longs = long_lats[:, 0]
+        else:
+            x_index = np.array(
+                [bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
+                 -bb_distance_from_topography - 1])
+            y_index = np.array(
+                [bb_distance_from_topography, -bb_distance_from_topography - 1, bb_distance_from_topography,
+                 -bb_distance_from_topography - 1])
+            box_lats = lats[x_index, y_index]
+            box_longs = longs[x_index, y_index]
         box_points = get_cartesian(box_lats, box_longs, height)
         box_points = apply_rotation_points(box_points, rotation_matrix)
         box_points = apply_centering_points(box_points, center)
@@ -741,7 +763,6 @@ def main(
         bounding_box_points = np.array(point_coords).reshape(8, 3)
         gmsh.finalize()
         # print(bounding_box_points)
-
     if fast_path:
         if topography_output is not None:
             print(f"Saving topography : {topography_output}")
@@ -815,6 +836,8 @@ def main(
             hf.create_dataset("topo_points", data=top_topo_points_only)
             hf.create_dataset("all_long_lats", data=all_long_lats)
             hf.create_dataset("fault_points", data=np.vstack(all_wall_points))
+            hf.create_dataset("fault_connectivity", data=np.vstack(all_wall_connectivity))
+
             if bounding_box_points is not None:
                 hf.create_dataset("bounding_box", data=bounding_box_points)
 
@@ -823,3 +846,4 @@ def main(
 
 if __name__ == "__main__":
     typer.run(main)
+
