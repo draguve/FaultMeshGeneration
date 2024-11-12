@@ -13,11 +13,13 @@ from scipy.spatial import KDTree
 meta_file = "outputs/BayModel1_final/meta.h5"
 detail_model_file = "External/USGS_SFCVM_v21-1_detailed.h5"
 regional_model_file = "External/USGS_SFCVM_v21-0_regional.h5"
-output_distance_from_topo = "outputs/VelModelTest/data_v21.1"
+output_distance_from_topo = "outputs/VelModelTest/data_v21.1_no_filter"
 point_field_resolution = 5000  #meter
 kd_tree_resolution = 20000
 chunk_size = 20
 cores_to_use = 8
+replace_invalid_values = False
+invalid_value = -1.e+20
 
 temp_dir = tempfile.mkdtemp()
 
@@ -167,12 +169,13 @@ def get_v_values(i, j, k, xg, yg, zg):
 def get_clean_values(i, j, k, x_chunk, y_chunk, z_chunk):
     xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
     _, _, _, values = get_v_values(i, j, k, xg, yg, zg)
-    invalid_mask = values == -1.e+20
-    # print(f"Shapes {values.shape} {xg.shape} {invalid_mask.shape}")
-    invalid_points = np.column_stack((xg[invalid_mask], yg[invalid_mask], zg[invalid_mask]))
-    if len(invalid_points) > 0:
-        distances, indices = QueryTree.query(invalid_points)
-        values[invalid_mask] = ValidValues[indices]
+    if replace_invalid_values:
+        invalid_mask = values == invalid_value
+        # print(f"Shapes {values.shape} {xg.shape} {invalid_mask.shape}")
+        invalid_points = np.column_stack((xg[invalid_mask], yg[invalid_mask], zg[invalid_mask]))
+        if len(invalid_points) > 0:
+            distances, indices = QueryTree.query(invalid_points)
+            values[invalid_mask] = ValidValues[indices]
     values = np.einsum('ijk->kji', values)
     return i, j, k, values
 
@@ -186,7 +189,7 @@ def search_tree(bounding_box):
 
     xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
     _, _, _, values = get_v_values(0, 0, 0, xg, yg, zg)
-    stuff_to_keep = values != -1.e+20
+    stuff_to_keep = values != invalid_value
     xg, yg, zg = xg[stuff_to_keep], yg[stuff_to_keep], zg[stuff_to_keep]
     values_to_keep = values[stuff_to_keep]
     print(f"Building Tree of shape {x.shape},{y.shape},{z.shape} with {values_to_keep.shape} values")
@@ -204,7 +207,8 @@ if __name__ == '__main__':
         rotation_matrix = f["rotation_matrix"][:]
         bounding_box = f.get("bounding_box")[:]
 
-        QueryTree, ValidValues = search_tree(bounding_box)
+        if replace_invalid_values:
+            QueryTree, ValidValues = search_tree(bounding_box)
 
         min_coords = np.min(bounding_box, axis=0)
         max_coords = np.max(bounding_box, axis=0)
