@@ -711,9 +711,27 @@ def main(
                 print("force_gmsh_bb needs to have only 4 points")
                 exit()
             long_lats = np.array(long_lats)
-            long_lats = long_lats[np.array([0, 1, 3, 2])]  #fix later stupidity/lazyness
             box_lats = long_lats[:, 1]
             box_longs = long_lats[:, 0]
+            box_points = get_cartesian(box_lats, box_longs, height)
+            box_points = apply_rotation_points(box_points, rotation_matrix)
+            box_points = apply_centering_points(box_points, center)
+            gmsh.initialize()
+            gmsh.model.add("Bounding Box")
+            p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
+            p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
+            p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
+            p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
+            l1 = gmsh.model.geo.addLine(p1, p2)
+            l2 = gmsh.model.geo.addLine(p2, p3)
+            l3 = gmsh.model.geo.addLine(p3, p4)
+            l4 = gmsh.model.geo.addLine(p4, p1)
+            ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+            rs = gmsh.model.geo.addSurfaceFilling([ll])
+            gmsh.model.geo.extrude([(2, rs)], 0, 0, -(bb_depth_below_fault + fault_depth) * 1000)
+            gmsh.model.geo.synchronize()
+            gmsh.model.mesh.generate(2)
+
         else:
             x_index = np.array(
                 [bb_distance_from_topography, bb_distance_from_topography, -bb_distance_from_topography - 1,
@@ -723,29 +741,29 @@ def main(
                  -bb_distance_from_topography - 1])
             box_lats = lats[x_index, y_index]
             box_longs = longs[x_index, y_index]
-        box_points = get_cartesian(box_lats, box_longs, height)
-        box_points = apply_rotation_points(box_points, rotation_matrix)
-        box_points = apply_centering_points(box_points, center)
+            box_points = get_cartesian(box_lats, box_longs, height)
+            box_points = apply_rotation_points(box_points, rotation_matrix)
+            box_points = apply_centering_points(box_points, center)
 
-        gmsh.initialize()
-        gmsh.model.add("Bounding Box")
-        p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
-        p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
-        p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
-        p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
+            gmsh.initialize()
+            gmsh.model.add("Bounding Box")
+            p1 = gmsh.model.geo.addPoint(box_points[0][0], box_points[0][1], box_points[0][2], bb_mesh_size)
+            p2 = gmsh.model.geo.addPoint(box_points[1][0], box_points[1][1], box_points[1][2], bb_mesh_size)
+            p3 = gmsh.model.geo.addPoint(box_points[2][0], box_points[2][1], box_points[2][2], bb_mesh_size)
+            p4 = gmsh.model.geo.addPoint(box_points[3][0], box_points[3][1], box_points[3][2], bb_mesh_size)
 
-        l1 = gmsh.model.geo.addLine(p1, p2)
-        l2 = gmsh.model.geo.addLine(p2, p4)
-        l3 = gmsh.model.geo.addLine(p4, p3)
-        l4 = gmsh.model.geo.addLine(p3, p1)
+            l1 = gmsh.model.geo.addLine(p1, p2)
+            l2 = gmsh.model.geo.addLine(p2, p4)
+            l3 = gmsh.model.geo.addLine(p4, p3)
+            l4 = gmsh.model.geo.addLine(p3, p1)
 
-        # Create Line Loop and Plane Surface
-        ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
-        ps = gmsh.model.geo.addPlaneSurface([ll])
+            # Create Line Loop and Plane Surface
+            ll = gmsh.model.geo.addCurveLoop([l1, l2, l3, l4])
+            ps = gmsh.model.geo.addPlaneSurface([ll])
 
-        gmsh.model.geo.extrude([(2, ps)], 0, 0, -(bb_depth_below_fault + fault_depth) * 1000)
-        gmsh.model.geo.synchronize()
-        gmsh.model.mesh.generate(2)
+            gmsh.model.geo.extrude([(2, ps)], 0, 0, -(bb_depth_below_fault + fault_depth) * 1000)
+            gmsh.model.geo.synchronize()
+            gmsh.model.mesh.generate(2)
 
         if plot_bb:
             gmsh.fltk.run()

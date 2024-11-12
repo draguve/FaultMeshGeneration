@@ -10,9 +10,9 @@ from netCDF4 import Dataset
 from pathos.multiprocessing import ProcessPool
 
 meta_file = "outputs/BayModel1_final/meta.h5"
-detail_model_file = "External/USGS_SFCVM_v21-0_detailed.h5"
+detail_model_file = "External/USGS_SFCVM_v21-1_detailed.h5"
 regional_model_file = "External/USGS_SFCVM_v21-0_regional.h5"
-output_distance_from_topo = "outputs/VelModelTest/data"
+output_distance_from_topo = "outputs/VelModelTest/data_v21.1"
 point_field_resolution = 2000  #meter
 chunk_size = 50
 temp_dir = tempfile.mkdtemp()
@@ -76,6 +76,8 @@ def get_value(lat_longs):
         ["geomodelgrids_query", f"--models={detail_model_file},{regional_model_file}", f"--points={file_path}.in",
          f"--output={file_path}.out", "--values=Vp,Vs,Qp,Qs"])
     data = read_lat_lon_file(f"{file_path}.out")
+    os.remove(f"{file_path}.in")
+    os.remove(f"{file_path}.out")
     return data
 
 
@@ -142,7 +144,8 @@ def createNetcdf4SeisSolHandle(sname, x, y, z, aName):
     vTd = rootgrp.createVariable("data", "f4", ("u", "v", "w"))
     return rootgrp, vTd
 
-def calculate_and_save(i,j,k,x_chunk,y_chunk,z_chunk):
+
+def calculate_and_save(i, j, k, x_chunk, y_chunk, z_chunk):
     xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
     original_shape = xg.shape
     points = np.stack([xg.flatten(), yg.flatten(), zg.flatten()]).T
@@ -155,7 +158,7 @@ def calculate_and_save(i,j,k,x_chunk,y_chunk,z_chunk):
     values = np.einsum('ijk->kji', values)
 
     # vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
-    return i,j,k,values
+    return i, j, k, values
     # vTd_ss[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
 
 
@@ -177,7 +180,7 @@ with h5py.File(meta_file, 'r') as f:
     y_chunks = []
     z_chunks = []
 
-    rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_topo, z, y, x, "velocity")
+    rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_topo, z, y, x, "velocity_detail")
     for i in range(0, len(x), chunk_size):
         for j in range(0, len(y), chunk_size):
             for k in range(0, len(z), chunk_size):
@@ -191,13 +194,12 @@ with h5py.File(meta_file, 'r') as f:
                 y_chunks.append(y_chunk)
                 z_chunks.append(z_chunk)
 
-    processPool = ProcessPool(nodes=4)
-    results = processPool.imap(calculate_and_save, idx, jdx, kdx,x_chunks,y_chunks,z_chunks)
+    processPool = ProcessPool(nodes=8)
+    results = processPool.imap(calculate_and_save, idx, jdx, kdx, x_chunks, y_chunks, z_chunks)
 
     for result in tqdm(results, desc="Generating NetCDF", total=len(x_chunks)):
-        i,j,k,values = result
+        i, j, k, values = result
         vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
-
 
     rootgrp.close()
 shutil.rmtree(temp_dir)
