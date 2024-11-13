@@ -1,30 +1,28 @@
-import h5py
-import numpy as np
 import os
-import tempfile
-import uuid
 import shutil
 import subprocess
-from tqdm import tqdm
+import tempfile
+import uuid
+
+import h5py
+import numpy as np
+import typer
 from netCDF4 import Dataset
 from pathos.multiprocessing import ProcessPool
 from scipy.spatial import KDTree
-
-meta_file = "outputs/BayModel1_final/meta.h5"
-detail_model_file = "External/USGS_SFCVM_v21-1_detailed.h5"
-regional_model_file = "External/USGS_SFCVM_v21-0_regional.h5"
-output_distance_from_topo = "outputs/VelModelTest/data_v21.1_no_filter"
-point_field_resolution = 5000  #meter
-kd_tree_resolution = 20000
-chunk_size = 20
-cores_to_use = 8
-replace_invalid_values = False
-invalid_value = -1.e+20
+from tqdm import tqdm
+from typing_extensions import Annotated
 
 temp_dir = tempfile.mkdtemp()
 
 QueryTree = None
 ValidValues = None
+GEOGRIDS_MODEL_FILE = None
+POINT_FIELD_RESOLUTION = None
+KD_TREE_RESOLUTION = None
+CHUNK_SIZE = None
+REPLACE_INVALID_VALUES = None
+INVALID_VALUE = None
 
 
 def generate_random_id():
@@ -82,7 +80,7 @@ def get_value(lat_longs):
             file.write(f"{lat}  {lon}  {alt}\n")
 
     subprocess.run(
-        ["geomodelgrids_query", f"--models={detail_model_file},{regional_model_file}", f"--points={file_path}.in",
+        ["geomodelgrids_query", f"--models={GEOGRIDS_MODEL_FILE}", f"--points={file_path}.in",
          f"--output={file_path}.out", "--values=Vp,Vs,Qp,Qs"])
     data = read_lat_lon_file(f"{file_path}.out")
     os.remove(f"{file_path}.in")
@@ -169,8 +167,8 @@ def get_v_values(i, j, k, xg, yg, zg):
 def get_clean_values(i, j, k, x_chunk, y_chunk, z_chunk):
     xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
     _, _, _, values = get_v_values(i, j, k, xg, yg, zg)
-    if replace_invalid_values:
-        invalid_mask = values == invalid_value
+    if REPLACE_INVALID_VALUES:
+        invalid_mask = values == INVALID_VALUE
         # print(f"Shapes {values.shape} {xg.shape} {invalid_mask.shape}")
         invalid_points = np.column_stack((xg[invalid_mask], yg[invalid_mask], zg[invalid_mask]))
         if len(invalid_points) > 0:
@@ -183,13 +181,13 @@ def get_clean_values(i, j, k, x_chunk, y_chunk, z_chunk):
 def search_tree(bounding_box):
     min_coords = np.min(bounding_box, axis=0)
     max_coords = np.max(bounding_box, axis=0)
-    x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / kd_tree_resolution))
-    y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / kd_tree_resolution))
-    z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / kd_tree_resolution))
+    x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
+    y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
+    z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
 
     xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
     _, _, _, values = get_v_values(0, 0, 0, xg, yg, zg)
-    stuff_to_keep = values != invalid_value
+    stuff_to_keep = values != INVALID_VALUE
     xg, yg, zg = xg[stuff_to_keep], yg[stuff_to_keep], zg[stuff_to_keep]
     values_to_keep = values[stuff_to_keep]
     print(f"Building Tree of shape {x.shape},{y.shape},{z.shape} with {values_to_keep.shape} values")
@@ -201,8 +199,33 @@ def search_tree(bounding_box):
     return tree, values_to_keep
 
 
-if __name__ == '__main__':
+def main(
+        meta_file: Annotated[str, typer.Argument(help="Path for a meta file of a mesh")],
+        output_filename: Annotated[str, typer.Argument(help="Path to output file")],
+        geogrids_model_file: Annotated[str, typer.Argument(
+            help="Path to GeoGrids model file(s)")] = "External/USGS_SFCVM_v21-1_detailed.h5,External/USGS_SFCVM_v21-0_regional.h5",
+        point_field_resolution: Annotated[int, typer.Option(help="Resolution of the output netcdf in m")] = 5000,
+        kd_tree_resolution: Annotated[
+            int, typer.Option(help="Resolution of the kdtree for invalid values in m")] = 20000,
+        chunk_size: Annotated[
+            int, typer.Option(
+                help="Size of the chunks used to split, because we cant hold the entire matrix in memory")] = 50,
+        cores_to_use: Annotated[
+            int, typer.Option(help="Number of cores to use while building the netcdf")] = 8,
+        replace_invalid_values: Annotated[
+            bool, typer.Option(help="Replace invalid values from closest valid value")] = True,
+        invalid_value: Annotated[
+            float, typer.Option(help="Missing value")] = -1.e+20,
+):
     with h5py.File(meta_file, 'r') as f:
+        global GEOGRIDS_MODEL_FILE, POINT_FIELD_RESOLUTION, KD_TREE_RESOLUTION, CHUNK_SIZE, REPLACE_INVALID_VALUES, INVALID_VALUE, QueryTree, ValidValues,center,rotation_matrix
+        GEOGRIDS_MODEL_FILE = geogrids_model_file
+        POINT_FIELD_RESOLUTION = point_field_resolution
+        KD_TREE_RESOLUTION = kd_tree_resolution
+        CHUNK_SIZE = chunk_size
+        REPLACE_INVALID_VALUES = replace_invalid_values
+        INVALID_VALUE = invalid_value
+
         center = f["center"][:]
         rotation_matrix = f["rotation_matrix"][:]
         bounding_box = f.get("bounding_box")[:]
@@ -224,7 +247,7 @@ if __name__ == '__main__':
         y_chunks = []
         z_chunks = []
 
-        rootgrp, vTd = createNetcdf4ParaviewHandle(output_distance_from_topo, z, y, x, "velocity_detail")
+        rootgrp, vTd = createNetcdf4ParaviewHandle(output_filename, z, y, x, "velocity")
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
                 for k in range(0, len(z), chunk_size):
@@ -247,3 +270,7 @@ if __name__ == '__main__':
 
         rootgrp.close()
     shutil.rmtree(temp_dir)
+
+
+if __name__ == '__main__':
+    typer.run(main)
