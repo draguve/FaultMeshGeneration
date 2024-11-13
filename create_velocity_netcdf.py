@@ -23,6 +23,7 @@ KD_TREE_RESOLUTION = None
 CHUNK_SIZE = None
 REPLACE_INVALID_VALUES = None
 INVALID_VALUE = None
+COLUMN_TO_USE = "Vs"
 
 
 def generate_random_id():
@@ -81,7 +82,7 @@ def get_value(lat_longs):
 
     subprocess.run(
         ["geomodelgrids_query", f"--models={GEOGRIDS_MODEL_FILE}", f"--points={file_path}.in",
-         f"--output={file_path}.out", "--values=Vp,Vs,Qp,Qs"])
+         f"--output={file_path}.out", f"--values={COLUMN_TO_USE}"])
     data = read_lat_lon_file(f"{file_path}.out")
     os.remove(f"{file_path}.in")
     os.remove(f"{file_path}.out")
@@ -94,7 +95,7 @@ def read_lat_lon_file(file_path):
         file_path,
         skip_header=2,  # Skip the header row
         dtype=float,  # Define as float since all columns are numeric
-        names=["x0", "x1", "x2", "Vp", "Vs", "Qp", "Qs"]
+        names=["x0", "x1", "x2", COLUMN_TO_USE]
     )
     return data
 
@@ -216,9 +217,12 @@ def main(
             bool, typer.Option(help="Replace invalid values from closest valid value")] = True,
         invalid_value: Annotated[
             float, typer.Option(help="Missing value")] = -1.e+20,
+        column_to_use: Annotated[
+            str, typer.Option(help="What column to get from geogrid model")] = "Vs",
 ):
     with h5py.File(meta_file, 'r') as f:
-        global GEOGRIDS_MODEL_FILE, POINT_FIELD_RESOLUTION, KD_TREE_RESOLUTION, CHUNK_SIZE, REPLACE_INVALID_VALUES, INVALID_VALUE, QueryTree, ValidValues,center,rotation_matrix
+        global GEOGRIDS_MODEL_FILE, POINT_FIELD_RESOLUTION, KD_TREE_RESOLUTION, CHUNK_SIZE, REPLACE_INVALID_VALUES, INVALID_VALUE, QueryTree, ValidValues, center, rotation_matrix, COLUMN_TO_USE
+        COLUMN_TO_USE = column_to_use
         GEOGRIDS_MODEL_FILE = geogrids_model_file
         POINT_FIELD_RESOLUTION = point_field_resolution
         KD_TREE_RESOLUTION = kd_tree_resolution
