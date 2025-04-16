@@ -43,7 +43,7 @@ def extract_key_value_pairs(file_path):
     # Define regex patterns for key-value pairs with colon or equals sign
     # The value must not contain line breaks (excluding spaces/tabs)
     patterns = [
-        r'(\w+)\s*:\s*([\S]+)\n',  # Matches key: value (colon-based) where value doesn't have a newline
+        r'(\w+)\s*:\s*([\S]+)\n*$',  # Matches key: value (colon-based) where value doesn't have a newline
         r'(\w+)\s*=\s*([^\n;]+)'   # Matches key = value (equals-based) where value doesn't have a newline
     ]
 
@@ -55,7 +55,7 @@ def extract_key_value_pairs(file_path):
 
         # Search for both patterns
         for pattern in patterns:
-            matches = re.findall(pattern, content)
+            matches = re.findall(pattern, content,flags=re.MULTILINE)
             for match in matches:
                 key, value = match
                 key_value_pairs[key] = value.strip()  # Clean up any extra spaces in values
@@ -127,6 +127,9 @@ def main():
     print(rough_values)
     print(params)
 
+    material_values = extract_key_value_pairs(params.get('MaterialFileName'))
+    print(material_values)
+
     job_id_str = get_job_id()
     all_slurm_records = {}
     if job_id_str != "":
@@ -150,6 +153,9 @@ def main():
     row.append(rough_values.get("s_xy",""))
     row.append(rough_values.get("r_crit",""))
     row.append(rough_values.get("Vs",""))
+    row.append(material_values.get("rho",""))
+    row.append(material_values.get("mu",""))
+    row.append(material_values.get("lambda",""))
     row.append("") # For notes
     row.append(coordinates)
     row.append("single") # assume Single for now
