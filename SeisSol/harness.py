@@ -2,7 +2,9 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pylab as plt
-
+import argparse
+from pathlib import Path
+import sys
 
 def parse_parameters(file_path):
     output = {}
@@ -21,12 +23,13 @@ def plot_and_save(df,what_to_plot,plots_path):
     df.plot(y=what_to_plot,use_index=True)
     plt.savefig(f"{plots_path}{what_to_plot}.png", dpi=300, bbox_inches='tight')
 
-def main():
-    if not os.path.exists("parameters.par"):
-        print("Cannot find parameters.par file")
-        exit(1)
-    params = parse_parameters("parameters.par")
+def before(params):
+    output_prefix = os.path.abspath(params.get('OutputFile'))
+    output_dir = os.path.dirname(output_prefix)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    print(output_dir)
 
+def after(params):
     if int(params.get("EnergyOutput")) != 1:
         print("Energy Output is disabled")
         exit(0)
@@ -37,9 +40,13 @@ def main():
     if not os.path.exists(plots_path):
         os.makedirs(plots_path)
 
-    print("Generating plots...")
+    energy_file = f"{output_prefix}-energy.csv"
+    if not os.path.exists(energy_file):
+        print("Could not find energy file!")
+        exit(1)
 
-    df = pd.read_csv(f"{output_prefix}-energy.csv")
+    print("Generating plots...")
+    df = pd.read_csv(energy_file)
     df = df.pivot_table(index="time", columns="variable", values="measurement")
     df["seismic_moment_rate"] = np.gradient(df["seismic_moment"], df.index[1]) #df index gets the time difference between 2 points
     plot_and_save(df,"seismic_moment_rate",plots_path)
@@ -67,6 +74,27 @@ def main():
 
     print(f"Max M_0 : {np.max(df['M_0']):.10e}")
     print(f"Max M_w : {np.max(df['M_w'])}")
+
+def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        'mode',
+        choices=['before', 'after'],
+        help="Mode must be 'before' or 'after'"
+    )
+    args = parser.parse_args()
+
+    if not os.path.exists("parameters.par"):
+        print("Cannot find parameters.par file",file=sys.stderr)
+        exit(1)
+    params = parse_parameters("parameters.par")
+
+    if args.mode == "before":
+        before(params)
+    elif args.mode == "after":
+        after(params)
+
 
 
 
