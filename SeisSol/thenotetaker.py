@@ -3,35 +3,41 @@ import os
 import re
 import subprocess
 from datetime import datetime
+from pprint import pprint
 
-def get_slurm_job_usage(job_id):
+def get_all_sacct_info(job_id):
     try:
-        # Request specific fields from sacct
+        # Construct the sacct command
+        cmd = ["sacct", "-j", str(job_id), "--format=ALL", "-P"]
+        # print(f"Running command: {' '.join(cmd)}")
         result = subprocess.run(
-            [
-                "sacct",
-                "-j", str(job_id),
-                "--format=JobIDRaw,Start,End,Elapsed,NCPUS,NNodes",
-                "--noheader",
-                "--parsable2"
-            ],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"sacct error: {result.stderr.strip()}")
-        # Find the line corresponding to the base job ID (not .batch or .extern)
+        # print("\n--- STDOUT ---")
+        # print(result.stdout)
+        # print("\n--- STDERR ---")
+        # print(result.stderr)
+        if result.returncode != 0 or not result.stdout.strip():
+            print("sacct failed or returned empty output.")
+            return [{}]
         lines = result.stdout.strip().split("\n")
-        for line in lines:
-            parts = line.strip().split("|")
-            if parts[0] == str(job_id):
-                start, end, elapsed, ncpus, nnodes = parts[1], parts[2], parts[3], parts[4], parts[5]
-                return elapsed, int(ncpus), int(nnodes)
-        return None, None, None
+        # print(f"\nFound {len(lines)} lines.")
+        headers = lines[0].split("|")
+        # print(f"\nHeaders: {headers}")
+        records = []
+        for line in lines[1:]:
+            # print(f"\nProcessing line: {line}")
+            values = line.split("|")
+            record = dict(zip(headers, values))
+            records.append(record)
+        # print(f"\nMatched {len(records)} entries.")
+        return records
     except Exception as e:
         print(f"Error: {e}")
-        return None, None, None
+        return [{}]
 
 def extract_key_value_pairs(file_path):
     # Define regex patterns for key-value pairs with colon or equals sign
@@ -121,36 +127,46 @@ def main():
     print(rough_values)
     print(params)
 
-    job_id = int(get_job_id())
-    elapsed, cores, nodes = get_slurm_job_usage(job_id)
+    job_id_str = get_job_id()
+    all_slurm_records = {}
+    if job_id_str != "":
+        job_id = int(get_job_id())
+        all_slurm_records = get_all_sacct_info(job_id)
+        if len(all_slurm_records) == 0:
+            all_slurm_records = {}
+        else:
+            all_slurm_records = all_slurm_records[0]
+    pprint(all_slurm_records)
 
     m_0,m_w = get_max_values(params)
 
     coordinates = extract_coordinates(rough_values.get("r"))
-    row.append(rough_values.get("mu_d"))
-    row.append(rough_values.get("mu_s"))
-    row.append(rough_values.get("d_c"))
-    row.append(rough_values.get("s_xx"))
-    row.append(rough_values.get("s_yy"))
-    row.append(rough_values.get("s_zz"))
-    row.append(rough_values.get("s_xy"))
-    row.append(rough_values.get("r_crit"))
-    row.append(rough_values.get("Vs"))
+    row.append(rough_values.get("mu_d",""))
+    row.append(rough_values.get("mu_s",""))
+    row.append(rough_values.get("d_c",""))
+    row.append(rough_values.get("s_xx",""))
+    row.append(rough_values.get("s_yy",""))
+    row.append(rough_values.get("s_zz",""))
+    row.append(rough_values.get("s_xy",""))
+    row.append(rough_values.get("r_crit",""))
+    row.append(rough_values.get("Vs",""))
     row.append("") # For notes
     row.append(coordinates)
     row.append("single") # assume Single for now
-    row.append(elapsed) #Exec time
-    row.append(nodes) # assume 4 nodes for now
+    row.append(all_slurm_records.get("Elapsed",""))
+    row.append(all_slurm_records.get("AllocNodes",""))
     row.append("CPU")  # assume CPU
-    row.append(params.get("EndTime"))
+    row.append(params.get("EndTime",""))
     row.append(m_0) # Max M_0
     row.append(m_w) # Max M_w
     row.append("") # Link
-    row.append(get_job_id()) # JobID
+    row.append(job_id_str) # JobID
+    row.append(all_slurm_records.get("Planned",""))
+    row.append(all_slurm_records.get("Submit",""))
+    row.append(all_slurm_records.get("NodeList",""))
+    row.append(all_slurm_records.get("CPUTimeRAW",""))
+    print(row)
     write_row(row)
-
-
-
 
 if __name__ == '__main__':
     main()
