@@ -53,7 +53,7 @@ def get_multi_line_string(array):
     formatted = []
     for point in points:
         formatted.append(" ".join(str(x) for x in point))
-    return f"MULTILINESTRING(({",".join(formatted)}))"
+    return f"MULTILINESTRING(({','.join(formatted)}))"
 
 
 def get_random(N=10):
@@ -236,8 +236,10 @@ def main(
         k.append(folder)
         for row in outputs:
             geometry = wkt.loads(get_multi_line_string(row[-1]))
-            placemark = kml.Placemark(name=row[1])
-            placemark.geometry = geometry
+            placemark = kml.Placemark(
+                name=row[1],
+                geometry=geometry,
+            )
             folder.append(placemark)
         with open(kml_output, 'w') as f:
             f.write(k.to_string(prettyprint=True))

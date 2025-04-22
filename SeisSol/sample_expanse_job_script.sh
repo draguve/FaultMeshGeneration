@@ -50,5 +50,5 @@ python ~/GitHub/FaultMeshGeneration/SeisSol/harness.py after
 
 # If output folder isn't empty then compress it
 if [ -d "${OUTPUT_DIR}" ] && [ "$(ls -A "${OUTPUT_DIR}")" ]; then
-    tar --use-compress-program="pigz" -cvf "${SLURM_JOB_NAME}.tar.gz" "${OUTPUT_DIR}"
+    tar --use-compress-program="pigz" -cvf "${SLURM_JOB_NAME}.tar.gz" -C "$(dirname "$OUTPUT_DIR")" "$(basename "$OUTPUT_DIR")"
 fi
