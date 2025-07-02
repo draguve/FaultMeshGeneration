@@ -3,13 +3,13 @@
 # Output and error (also --output, --error):
 #SBATCH -o ./%j.%x.out
 #SBATCH -e ./%j.%x.err
-#SBATCH --job-name="XY20.75-single-1m-us0.5"
+#SBATCH --job-name="Seissol-double"
 #SBATCH --mail-type=BEGIN
 #SBATCH --mail-type=END
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=ritwik.patil+slurm@sjsu.edu
 # Wall clock limit:
-#SBATCH --time=3:00:00
+#SBATCH --time=23:00:00
 #SBATCH --no-requeue
 #SBATCH --partition=compute
 #SBATCH --account=ddp454
@@ -44,13 +44,22 @@ export FOLDER_NAME=$(basename "$CONFIG_DIR")
 
 # start simulation
 ulimit -Ss 2097152
-srun --mpi=pmix_v3 -n ${SLURM_NTASKS} SeisSol_Release_srome_4_elastic parameters.par
+srun --mpi=pmix_v3 -n ${SLURM_NTASKS} SeisSol_Release_drome_4_elastic parameters.par
 
 # Postprocess will generate the plots from the energy file and print out useful metrics
 export NUMEXPR_NUM_THREADS=16
 python ~/FaultMeshGeneration/SeisSol/harness.py after
 
+python ~/FaultMeshGeneration/SeisSol/thenotetaker.py
+
 # If output folder isn't empty then compress it
 if [ -d "${OUTPUT_DIR}" ] && [ "$(ls -A "${OUTPUT_DIR}")" ]; then
+    set +e
     tar --use-compress-program="pigz" -cvf "../${FOLDER_NAME}.tar.gz" -C "$(dirname "$CONFIG_DIR")" "${FOLDER_NAME}"
+    exitcode=$?
+
+    if [ "$exitcode" != "1" ] && [ "$exitcode" != "0" ]; then
+        exit $exitcode
+    fi
+    set -e
 fi
