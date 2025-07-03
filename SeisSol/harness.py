@@ -5,6 +5,7 @@ import matplotlib.pylab as plt
 import argparse
 from pathlib import Path
 import sys
+
 def parse_parameters(file_path):
     output = {}
     with open(file_path, 'r') as file:
@@ -17,14 +18,17 @@ def parse_parameters(file_path):
                 value = value.strip().strip("'\"")  # Remove quotes if any
                 output[key] = value
     return output
+
 def plot_and_save(df,what_to_plot,plots_path):
     df.plot(y=what_to_plot,use_index=True)
     plt.savefig(f"{plots_path}{what_to_plot}.png", dpi=300, bbox_inches='tight')
+
 def before(params):
     output_prefix = os.path.abspath(params.get('OutputFile'))
     output_dir = os.path.dirname(output_prefix)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     print(output_dir)
+
 def after(params):
     if int(params.get("EnergyOutput")) != 1:
         print("Energy Output is disabled")

@@ -2,8 +2,11 @@ from harness import *
 import os
 import re
 import subprocess
-from datetime import datetime
 from pprint import pprint
+import numpy as np
+import pandas as pd
+import argparse
+import sys
 
 def get_all_sacct_info(job_id):
     try:
@@ -59,34 +62,27 @@ def extract_key_value_pairs(file_path):
             for match in matches:
                 key, value = match
                 key_value_pairs[key] = value.strip()  # Clean up any extra spaces in values
-
     return key_value_pairs
-
 
 def extract_coordinates(expression):
     # Regular expression to match the x, y, z coordinates
     pattern = r'([xyz])([+-]?\d*\.\d+|\d+)'  # Match x, y, z followed by the number (with optional signs)
-
     # Find all matches for x, y, z with their corresponding values
     matches = re.findall(pattern, expression)
-
     # Create a dictionary to store the coordinates
     coordinates = {'x': None, 'y': None, 'z': None}
-
     # Assign the found values to the corresponding coordinate
     for axis, value in matches:
         coordinates[axis] = -float(value)
-
     # Return the extracted coordinates as a tuple
     return (coordinates['x'], coordinates['y'], coordinates['z'])
+
 
 def get_job_id():
     # List files in the current directory
     files = os.listdir('.')
-
     # Regex pattern to match SLURM output filenames (e.g., 38483002.XY20-single-1m-ud0.3.out)
     pattern = re.compile(r'^(\d+)\..*\.out$')
-
     # Search for the job ID
     job_id = ""
     for f in files:
@@ -94,12 +90,13 @@ def get_job_id():
         if match:
             job_id = match.group(1)
             break  # remove this if you want to find all job IDs
-
     return job_id
+
 
 def write_row(row):
     with open("notes.tsv", "w") as f:
         f.write("\t".join(map(str, row)) + "\n")
+
 
 def get_max_values(params):
     output_prefix = params.get('OutputFile')
@@ -114,12 +111,17 @@ def get_max_values(params):
     return f"{np.max(df['M_0']):.10e}",f"{np.max(df['M_w'])}"
 
 def main():
-    if not os.path.exists("parameters.par"):
-        print("Cannot find parameters.par file",file=sys.stderr)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--parameter',default="parameters.par")
+    args = parser.parse_args()
+    par_file = args.parameter
+
+    if not os.path.exists(par_file):
+        print("Cannot find parameter file",file=sys.stderr)
         exit(1)
 
     row = []
-    params = parse_parameters("parameters.par")
+    params = parse_parameters(par_file)
     output_prefix = params.get('OutputFile')
     row.append(os.getcwd())
 

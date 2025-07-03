@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Output and error (also --output, --error):
 #SBATCH -o ./%j.%x.out
 #SBATCH -e ./%j.%x.err
@@ -9,7 +8,7 @@
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=ritwik.patil+slurm@sjsu.edu
 # Wall clock limit:
-#SBATCH --time=23:00:00
+#SBATCH --time=1:00:00
 #SBATCH --no-requeue
 #SBATCH --partition=compute
 #SBATCH --account=ddp454
@@ -34,23 +33,24 @@ export SEISSOL_CHECKPOINT_ALIGNMENT=8388608
 export SEISSOL_CHECKPOINT_DIRECT=1
 export ASYNC_MODE=THREAD
 export ASYNC_BUFFER_ALIGNMENT=8388608
+export NUMEXPR_NUM_THREADS=16
 
 echo 'num_nodes:' ${SLURM_JOB_NUM_NODES} 'ntasks:' ${SLURM_NTASKS}
 
 # harness script will find the output directory and make it if it does not exist, store into output directory variable
-export OUTPUT_DIR=$(python ~/FaultMeshGeneration/SeisSol/harness.py before)
+export PAR_FILE="parameters.par"
+export OUTPUT_DIR=$(python ~/FaultMeshGeneration/SeisSol/harness.py before -p ${PAR_FILE})
 export CONFIG_DIR=$(dirname "$OUTPUT_DIR")
 export FOLDER_NAME=$(basename "$CONFIG_DIR")
 
+
 # start simulation
 ulimit -Ss 2097152
-srun --mpi=pmix_v3 -n ${SLURM_NTASKS} SeisSol_Release_drome_4_elastic parameters.par
-
+srun --mpi=pmix_v3 -n ${SLURM_NTASKS} SeisSol_Release_drome_4_elastic ${PAR_FILE}
 # Postprocess will generate the plots from the energy file and print out useful metrics
-export NUMEXPR_NUM_THREADS=16
-python ~/FaultMeshGeneration/SeisSol/harness.py after
+python ~/FaultMeshGeneration/SeisSol/harness.py after -p ${PAR_FILE}
 
-python ~/FaultMeshGeneration/SeisSol/thenotetaker.py
+python ~/FaultMeshGeneration/SeisSol/thenotetaker.py -p ${PAR_FILE}
 
 # If output folder isn't empty then compress it
 if [ -d "${OUTPUT_DIR}" ] && [ "$(ls -A "${OUTPUT_DIR}")" ]; then
