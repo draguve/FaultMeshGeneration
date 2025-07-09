@@ -251,7 +251,8 @@ def main(
         y_chunks = []
         z_chunks = []
 
-        rootgrp, vTd = createNetcdf4ParaviewHandle(output_filename, z, y, x, "velocity")
+        rootgrp, vTd = createNetcdf4ParaviewHandle(output_filename, z, y, x, column_to_use)
+        rootgrp_ss,vTd_ss = createNetcdf4SeisSolHandle(output_filename, z, y, x, column_to_use)
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
                 for k in range(0, len(z), chunk_size):
@@ -271,8 +272,10 @@ def main(
         for result in tqdm(results, desc="Generating NetCDF", total=len(x_chunks)):
             i, j, k, values = result
             vTd[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
+            vTd_ss[k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = values
 
         rootgrp.close()
+        rootgrp_ss.close()
     shutil.rmtree(temp_dir)
 
 
