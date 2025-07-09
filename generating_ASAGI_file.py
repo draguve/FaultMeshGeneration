@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import typer
 from netCDF4 import Dataset
 
 
@@ -64,8 +65,7 @@ def writeNetcdf4SeisSol(sname, x, y, z, aName, aData):
     mat[:] = newarr
     rootgrp.close()
 
-
-if __name__ == '__main__':
+def main():
     x = np.linspace(-50000, 50000, int((50000 + 50000) / 100) + 1)  # for testing if correct
     y = np.linspace(0, 10000, int(10000 / 100))
     z = np.linspace(-50000, 50000, int((50000 + 50000) / 100))
@@ -104,3 +104,7 @@ if __name__ == '__main__':
 
     writeNetcdf4Paraview(prefix, x, y, z, ldataName, lgridded_myData)
     writeNetcdf4SeisSol(prefix, x, y, z, ldataName, lgridded_myData)
+
+
+if __name__ == '__main__':
+    typer.run(main)

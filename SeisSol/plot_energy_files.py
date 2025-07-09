@@ -2,13 +2,10 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pylab as plt
-import argparse
 from pathlib import Path
-import sys
 import typer
-from typing_extensions import Annotated
+from typing_extensions import Annotated, Optional
 import glob
-from pathlib import Path
 
 def convert_to_df(filepath: Path) -> pd.DataFrame:
     if not os.path.exists(filepath):
@@ -37,7 +34,7 @@ def plot_and_save_column(column_name: str, file_data_frames: list[tuple[str, pd.
 
 def main(
     energy_directory: Annotated[Path, typer.Argument(help="Directory containing all the energy files")],
-    output: Annotated[Path, typer.Option(help="Output path for the plots, will make direcory if it does not exist, by default will add plots folder to energy direcory")] = None
+    output: Annotated[Optional[Path], typer.Option(help="Output path for the plots, will make direcory if it does not exist, by default will add plots folder to energy direcory")] = None
 ):
     if not os.path.isdir(energy_directory):
         print(f"Could not find {energy_directory}!")
@@ -49,7 +46,7 @@ def main(
     output.mkdir(parents=True, exist_ok=True)
 
     csv_files = glob.glob(os.path.join(energy_directory, "*.csv"))
-    file_data_frames = [(Path(file).stem, convert_to_df(file)) for file in csv_files]
+    file_data_frames = [(Path(file).stem, convert_to_df(Path(file))) for file in csv_files]
     all_columns = set.union(*[set(df.columns) for _, df in file_data_frames ])
     for column in all_columns:
         output_path = output / f"{column}.svg"

@@ -1,0 +1,9 @@
+// Project tasks configuration. See https://zed.dev/docs/tasks for documentation.
+//
+// Example:
+[
+  {
+    "label": "Run plot energy",
+    "command": "python SeisSol/plot_energy_files.py Tests_Temp/energies"
+  }
+]

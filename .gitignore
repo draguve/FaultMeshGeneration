@@ -112,3 +112,5 @@ outputs/
 cache/
 __pycache__/
 External/
+Tests_Temp/
+.DS_Store
