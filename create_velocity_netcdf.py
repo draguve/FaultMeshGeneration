@@ -52,12 +52,12 @@ def revert_centering_points(points, center):
 def get_geodetic(x, y, z):
     rad = 6378137.0  # Equatorial radius
     f = 1.0 / 298.257223563  # Flattening factor
-    e2 = 2 * f - f ** 2  # Square of eccentricity
+    e2 = 2 * f - f**2  # Square of eccentricity
 
     lon = np.arctan2(y, x)
 
     # Initial guess for latitude
-    p = np.sqrt(x ** 2 + y ** 2)
+    p = np.sqrt(x**2 + y**2)
     lat = np.arctan2(z, p * (1 - e2))  # Initial latitude approximation
 
     # Iteratively solve for latitude and altitude
@@ -83,8 +83,14 @@ def get_value(lat_longs):
             file.write(f"{lat}  {lon}  {alt}\n")
 
     subprocess.run(
-        ["geomodelgrids_query", f"--models={GEOGRIDS_MODEL_FILE}", f"--points={file_path}.in",
-         f"--output={file_path}.out", f"--values={','.join(COLUMNS_TO_USE)}"])
+        [
+            "geomodelgrids_query",
+            f"--models={GEOGRIDS_MODEL_FILE}",
+            f"--points={file_path}.in",
+            f"--output={file_path}.out",
+            f"--values={','.join(COLUMNS_TO_USE)}",
+        ]
+    )
     data = read_lat_lon_file(f"{file_path}.out")
     os.remove(f"{file_path}.in")
     os.remove(f"{file_path}.out")
@@ -109,7 +115,9 @@ def points_to_long_lat(points, center, rotation_matrix):
     return np.stack((lat, long, depth)).T
 
 
-def createNetcdf4ParaviewHandle(sname: Path, x: np.ndarray, y: np.ndarray, z: np.ndarray, aName: list[str]):
+def createNetcdf4ParaviewHandle(
+    sname: Path, x: np.ndarray, y: np.ndarray, z: np.ndarray, aName: list[str]
+):
     # "create a netcdf file readable by paraview (but not by ASAGI)"
     fname = sname.with_name(f"{sname.name}_paraview.nc")
     # print("writing " + fname)
@@ -131,11 +139,15 @@ def createNetcdf4ParaviewHandle(sname: Path, x: np.ndarray, y: np.ndarray, z: np
 
     output_arrays = []
     for name in aName:
-        output_arrays.append(rootgrp.createVariable(name, "f4", ("u", "v", "w")))
+        output_arrays.append(
+            rootgrp.createVariable(name, "f4", ("u", "v", "w"))
+        )
     return rootgrp, output_arrays
 
 
-def createNetcdf4SeisSolHandle(sname: Path, x: np.ndarray, y: np.ndarray, z: np.ndarray, aName: list[str]):
+def createNetcdf4SeisSolHandle(
+    sname: Path, x: np.ndarray, y: np.ndarray, z: np.ndarray, aName: list[str]
+):
     "create a netcdf file readable by paraview (but not by ASAGI)"
     fname = sname.with_name(f"{sname.name}_ASAGI.nc")
     # print("writing " + fname)
@@ -164,11 +176,12 @@ def createNetcdf4SeisSolHandle(sname: Path, x: np.ndarray, y: np.ndarray, z: np.
     return rootgrp, mat, mattype8
 
 
-def convert_for_asagi_mat(l_data:list[np.ndarray], mattype8):
+def convert_for_asagi_mat(l_data: list[np.ndarray], mattype8):
     arr = np.stack(l_data, axis=3)
     newarr = arr.view(dtype=mattype8)
     newarr = newarr.reshape(newarr.shape[:-1])
     return newarr
+
 
 def get_v_values(i, j, k, xg, yg, zg):
     original_shape = xg.shape
@@ -176,42 +189,60 @@ def get_v_values(i, j, k, xg, yg, zg):
     latlongs = points_to_long_lat(points, center, rotation_matrix)
     data = get_value(latlongs)
     values = []
-    for i in range(data.shape[1]-3):
-        column = data[:,3+i]
+    for i in range(data.shape[1] - 3):
+        column = data[:, 3 + i]
         values.append(column.reshape(original_shape))
     return i, j, k, values
 
 
 def get_clean_values(i, j, k, x_chunk, y_chunk, z_chunk):
-    xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
+    xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing="ij")
     _, _, _, values = get_v_values(i, j, k, xg, yg, zg)
     if REPLACE_INVALID_VALUES:
         invalid_mask = values[0] == INVALID_VALUE
-        invalid_points = np.column_stack((xg[invalid_mask], yg[invalid_mask], zg[invalid_mask]))
+        invalid_points = np.column_stack(
+            (xg[invalid_mask], yg[invalid_mask], zg[invalid_mask])
+        )
         if len(invalid_points) > 0:
             distances, indices = QueryTree.query(invalid_points)
-            for column_index,column in enumerate(values):
+            for column_index, column in enumerate(values):
                 column[invalid_mask] = ValidValues[column_index][indices]
-                column = np.einsum('ijk->kji', column)
+                column = np.einsum("ijk->kji", column)
     return i, j, k, values
 
 
 def search_tree(bounding_box):
     min_coords = np.min(bounding_box, axis=0)
     max_coords = np.max(bounding_box, axis=0)
-    x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
-    y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
-    z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION))
+    x = np.linspace(
+        min_coords[0],
+        max_coords[0],
+        int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION),
+    )
+    y = np.linspace(
+        min_coords[1],
+        max_coords[1],
+        int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION),
+    )
+    z = np.linspace(
+        min_coords[2],
+        max_coords[2],
+        int((max_coords[0] - min_coords[0]) / KD_TREE_RESOLUTION),
+    )
 
-    print(f"Getting column values for tree of shape {x.shape},{y.shape},{z.shape}")
-    xg, yg, zg = np.meshgrid(x, y, z, indexing='ij')
+    print(
+        f"Getting column values for tree of shape {x.shape},{y.shape},{z.shape}"
+    )
+    xg, yg, zg = np.meshgrid(x, y, z, indexing="ij")
     _, _, _, values = get_v_values(0, 0, 0, xg, yg, zg)
     stuff_to_keep = values[0] != INVALID_VALUE
     xg, yg, zg = xg[stuff_to_keep], yg[stuff_to_keep], zg[stuff_to_keep]
     values_to_keep = []
     for column in values:
         values_to_keep.append(column[stuff_to_keep])
-    print(f"Building Tree of shape {x.shape},{y.shape},{z.shape} with {values_to_keep[0].shape} values")
+    print(
+        f"Building Tree of shape {x.shape},{y.shape},{z.shape} with {values_to_keep[0].shape} values"
+    )
     points = np.vstack((xg, yg, zg)).T
     tree = KDTree(points)
     return tree, values_to_keep
@@ -219,38 +250,73 @@ def search_tree(bounding_box):
 
 @app.command()
 def main(
-        meta_file: Annotated[Path, typer.Argument(help="Path for a meta file of a mesh")],
-        output_filename: Annotated[Path, typer.Argument(help="Path to output file")],
-        geogrids_model_file: Annotated[Path, typer.Argument(
-            help="Path to GeoGrids model file(s)")] = Path("External/USGS_SFCVM_v21-0_regional.h5"),
-        point_field_resolution: Annotated[int, typer.Option(help="Resolution of the output netcdf in m")] = 5000,
-        kd_tree_resolution: Annotated[
-            int, typer.Option(help="Resolution of the kdtree for invalid values in m")] = 20000,
-        chunk_size: Annotated[
-            int, typer.Option(
-                help="Size of the chunks used to split, because we cant hold the entire matrix in memory")] = 50,
-        cores_to_use: Annotated[
-            int, typer.Option(help="Number of cores to use while building the netcdf")] = 8,
-        replace_invalid_values: Annotated[
-            bool, typer.Option(help="Replace invalid values from closest valid value")] = True,
-        invalid_value: Annotated[
-            float, typer.Option(help="Missing value")] = -1.e+20,
-        columns_to_use: Annotated[
-                list[str], typer.Option(help="What column to get from geogrid model")] = ["Vs",],
+    meta_file: Annotated[
+        Path, typer.Argument(help="Path for a meta file of a mesh")
+    ],
+    output_filename: Annotated[
+        Path, typer.Argument(help="Path to output file")
+    ],
+    geogrids_model_file: Annotated[
+        list[Path], typer.Argument(help="Path to GeoGrids model file(s)")
+    ] = [
+        Path("External/USGS_SFCVM_v21-0_regional.h5"),
+    ],
+    point_field_resolution: Annotated[
+        int, typer.Option(help="Resolution of the output netcdf in m")
+    ] = 5000,
+    kd_tree_resolution: Annotated[
+        int,
+        typer.Option(help="Resolution of the kdtree for invalid values in m"),
+    ] = 20000,
+    chunk_size: Annotated[
+        int,
+        typer.Option(
+            help="Size of the chunks used to split, because we cant hold the entire matrix in memory"
+        ),
+    ] = 50,
+    cores_to_use: Annotated[
+        int,
+        typer.Option(help="Number of cores to use while building the netcdf"),
+    ] = 8,
+    replace_invalid_values: Annotated[
+        bool,
+        typer.Option(help="Replace invalid values from closest valid value"),
+    ] = True,
+    invalid_value: Annotated[
+        float, typer.Option(help="Missing value")
+    ] = -1.0e20,
+    columns_to_use: Annotated[
+        list[str], typer.Option(help="What column to get from geogrid model")
+    ] = [
+        "Vs",
+    ],
 ):
-    with h5py.File(meta_file, 'r') as f:
-        global GEOGRIDS_MODEL_FILE, POINT_FIELD_RESOLUTION, KD_TREE_RESOLUTION, CHUNK_SIZE, REPLACE_INVALID_VALUES, INVALID_VALUE, QueryTree, ValidValues, center, rotation_matrix, COLUMNS_TO_USE
+    with h5py.File(meta_file, "r") as f:
+        global \
+            GEOGRIDS_MODEL_FILE, \
+            POINT_FIELD_RESOLUTION, \
+            KD_TREE_RESOLUTION, \
+            CHUNK_SIZE, \
+            REPLACE_INVALID_VALUES, \
+            INVALID_VALUE, \
+            QueryTree, \
+            ValidValues, \
+            center, \
+            rotation_matrix, \
+            COLUMNS_TO_USE
         COLUMNS_TO_USE = columns_to_use
-        GEOGRIDS_MODEL_FILE = geogrids_model_file
+        GEOGRIDS_MODEL_FILE = ",".join(
+            [str(file) for file in geogrids_model_file]
+        )
         POINT_FIELD_RESOLUTION = point_field_resolution
         KD_TREE_RESOLUTION = kd_tree_resolution
         CHUNK_SIZE = chunk_size
         REPLACE_INVALID_VALUES = replace_invalid_values
         INVALID_VALUE = invalid_value
 
-        center : np.ndarray = f["center"][:]
-        rotation_matrix : np.ndarray = f["rotation_matrix"][:]
-        bounding_box : np.ndarray = f.get("bounding_box")[:]
+        center: np.ndarray = f["center"][:]
+        rotation_matrix: np.ndarray = f["rotation_matrix"][:]
+        bounding_box: np.ndarray = f.get("bounding_box")[:]
 
         if replace_invalid_values:
             QueryTree, ValidValues = search_tree(bounding_box)
@@ -258,9 +324,21 @@ def main(
         min_coords = np.min(bounding_box, axis=0)
         max_coords = np.max(bounding_box, axis=0)
 
-        x = np.linspace(min_coords[0], max_coords[0], int((max_coords[0] - min_coords[0]) / point_field_resolution))
-        y = np.linspace(min_coords[1], max_coords[1], int((max_coords[0] - min_coords[0]) / point_field_resolution))
-        z = np.linspace(min_coords[2], max_coords[2], int((max_coords[0] - min_coords[0]) / point_field_resolution))
+        x = np.linspace(
+            min_coords[0],
+            max_coords[0],
+            int((max_coords[0] - min_coords[0]) / point_field_resolution),
+        )
+        y = np.linspace(
+            min_coords[1],
+            max_coords[1],
+            int((max_coords[0] - min_coords[0]) / point_field_resolution),
+        )
+        z = np.linspace(
+            min_coords[2],
+            max_coords[2],
+            int((max_coords[0] - min_coords[0]) / point_field_resolution),
+        )
 
         idx = []
         jdx = []
@@ -269,14 +347,16 @@ def main(
         y_chunks = []
         z_chunks = []
 
-        rootgrp, vTd = createNetcdf4ParaviewHandle(output_filename, z, y, x, columns_to_use)
+        rootgrp, vTd = createNetcdf4ParaviewHandle(
+            output_filename, z, y, x, columns_to_use
+        )
         # rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(output_filename, z, y, x, columns_to_use)
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
                 for k in range(0, len(z), chunk_size):
-                    x_chunk = x[i:i + chunk_size]
-                    y_chunk = y[j:j + chunk_size]
-                    z_chunk = z[k:k + chunk_size]
+                    x_chunk = x[i : i + chunk_size]
+                    y_chunk = y[j : j + chunk_size]
+                    z_chunk = z[k : k + chunk_size]
                     idx.append(i)
                     jdx.append(j)
                     kdx.append(k)
@@ -286,19 +366,35 @@ def main(
                     # print(f"{vTd[0][i:i + chunk_size, j:j + chunk_size, k:k + chunk_size].shape} {x_chunk.shape} {y_chunk.shape} {z_chunk.shape}")
 
         if cores_to_use == 1:
-            for chunk_arguments in tqdm(zip(idx, jdx, kdx, x_chunks, y_chunks, z_chunks), desc="Generating NetCDF", total=len(x_chunks)):
+            for chunk_arguments in tqdm(
+                zip(idx, jdx, kdx, x_chunks, y_chunks, z_chunks),
+                desc="Generating NetCDF",
+                total=len(x_chunks),
+            ):
                 i, j, k, values = get_clean_values(*chunk_arguments)
-                for column_index,column in enumerate(values):
-                    vTd[column_index][k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = column
+                for column_index, column in enumerate(values):
+                    vTd[column_index][
+                        k : k + chunk_size,
+                        j : j + chunk_size,
+                        i : i + chunk_size,
+                    ] = column
 
         else:
             processPool = ProcessPool(nodes=cores_to_use)
-            results = processPool.imap(get_clean_values, idx, jdx, kdx, x_chunks, y_chunks, z_chunks)
+            results = processPool.imap(
+                get_clean_values, idx, jdx, kdx, x_chunks, y_chunks, z_chunks
+            )
 
-            for result in tqdm(results, desc="Generating NetCDF", total=len(x_chunks)):
+            for result in tqdm(
+                results, desc="Generating NetCDF", total=len(x_chunks)
+            ):
                 i, j, k, values = result
-                for column_index,column in enumerate(values):
-                    vTd[column_index][k:k + chunk_size, j:j + chunk_size, i:i + chunk_size] = column
+                for column_index, column in enumerate(values):
+                    vTd[column_index][
+                        k : k + chunk_size,
+                        j : j + chunk_size,
+                        i : i + chunk_size,
+                    ] = column
 
         rootgrp.close()
         # rootgrp_ss.close()
