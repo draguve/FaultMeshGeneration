@@ -10,9 +10,9 @@ import numpy as np
 import typer
 from netCDF4 import Dataset
 from pathos.multiprocessing import ProcessPool
-from scipy.spatial import KDTree
 from tqdm import tqdm
 from typing_extensions import Annotated
+import scipy
 
 temp_dir = tempfile.mkdtemp()
 app = typer.Typer(pretty_exceptions_show_locals=False)
@@ -136,7 +136,7 @@ def createNetcdf4ParaviewHandle(
     output_arrays = []
     for name in aName:
         output_arrays.append(
-            rootgrp.createVariable(name, "f4", ("w", "v", "u"), fill_value=INVALID_VALUE)
+            rootgrp.createVariable(name, "f4", ("w", "v", "u"))
         )
     return rootgrp, output_arrays
 
@@ -225,6 +225,7 @@ def main(
     invalid_value: Annotated[
         float, typer.Option(help="Missing value")
     ] = -1.0e20,
+    replace_invalid: Annotated[bool, typer.Option(help="Replace invalid values with closest valid value")] = True,
     columns_to_use: Annotated[
         list[str], typer.Option(help="What column to get from geogrid model")
     ] = [
@@ -301,37 +302,33 @@ def main(
                     z_chunks.append(z_chunk)
                     # print(f"{vTd[0][i:i + chunk_size, j:j + chunk_size, k:k + chunk_size].shape} {x_chunk.shape} {y_chunk.shape} {z_chunk.shape}")
 
-        if cores_to_use == 1:
-            for chunk_arguments in tqdm(
-                zip(idx, jdx, kdx, x_chunks, y_chunks, z_chunks),
-                desc="Generating NetCDF",
-                total=len(x_chunks),
-            ):
-                i, j, k, values = get_clean_values(*chunk_arguments)
-                for column_index, column in enumerate(values):
-                    vTd[column_index][
-                        i : i + chunk_size,
-                        j : j + chunk_size,
-                        k : k + chunk_size,
-                    ] = column
 
-        else:
-            processPool = ProcessPool(nodes=cores_to_use)
-            results = processPool.imap(
-                get_clean_values, idx, jdx, kdx, x_chunks, y_chunks, z_chunks
-            )
+        processPool = ProcessPool(nodes=cores_to_use)
+        results = processPool.imap(
+            get_clean_values, idx, jdx, kdx, x_chunks, y_chunks, z_chunks
+        )
 
-            for result in tqdm(
-                results, desc="Generating NetCDF", total=len(x_chunks)
-            ):
-                i, j, k, values = result
-                for column_index, column in enumerate(values):
-                    column = np.einsum('ijk->kji', column)
-                    vTd[column_index][
-                        k : k + chunk_size,
-                        j : j + chunk_size,
-                        i : i + chunk_size
-                    ] = column
+        for result in tqdm(
+            results, desc="Generating NetCDF", total=len(x_chunks)
+        ):
+            i, j, k, values = result
+            for column_index, column in enumerate(values):
+                column = np.einsum('ijk->kji', column)
+                vTd[column_index][
+                    k : k + chunk_size,
+                    j : j + chunk_size,
+                    i : i + chunk_size
+                ] = column
+
+        if replace_invalid:
+            for column_index in range(len(columns_to_use)):
+                print(f"Replacing invalid values with valid values for column {column_index}")
+                column_data = vTd[column_index][:]
+                invalid_mask = column_data == INVALID_VALUE
+                indices = scipy.ndimage.distance_transform_edt(invalid_mask, return_indices=True, return_distances = False)
+                filled_values = column_data[tuple(indices)]
+                vTd[column_index][:,:,:] = filled_values
+
 
         rootgrp.close()
         # rootgrp_ss.close()
