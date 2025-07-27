@@ -99,8 +99,8 @@ def main():
     sheer_stress = s_xy0 + s_xy1
 
     prefix = "test"
-    ldataName = ["sheer_stress"]
-    lgridded_myData = [sheer_stress]
+    ldataName = ["sheer_stress","shear_strees2"]
+    lgridded_myData = [sheer_stress,np.copy(sheer_stress)]
 
     writeNetcdf4Paraview(prefix, x, y, z, ldataName, lgridded_myData)
     writeNetcdf4SeisSol(prefix, x, y, z, ldataName, lgridded_myData)

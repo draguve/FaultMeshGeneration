@@ -164,20 +164,12 @@ def createNetcdf4SeisSolHandle(
     vz[:] = z
 
     ldata4 = [(name, "f4") for name in aName]
-    ldata8 = [(name, "f8") for name in aName]
+    ldata8 = [(name, "f4") for name in aName] # Does this work?
     mattype4 = np.dtype(ldata4)
     mattype8 = np.dtype(ldata8)
     mat_t = rootgrp.createCompoundType(mattype4, "material")
     mat = rootgrp.createVariable("data", mat_t, ("w", "v", "u"))
     return rootgrp, mat, mattype8
-
-
-def convert_for_asagi_mat(l_data: list[np.ndarray], mattype8):
-    arr = np.stack(l_data, axis=3)
-    newarr = arr.view(dtype=mattype8)
-    newarr = newarr.reshape(newarr.shape[:-1])
-    return newarr
-
 
 def get_v_values(i, j, k, xg, yg, zg):
     original_shape = xg.shape
@@ -245,6 +237,11 @@ def main(
             center, \
             rotation_matrix, \
             COLUMNS_TO_USE
+
+        if len(geogrids_model_file)==0:
+            print("Need to specify atleast a single model file")
+            exit(1)
+
         COLUMNS_TO_USE = columns_to_use
         GEOGRIDS_MODEL_FILE = ",".join(
             [str(file) for file in geogrids_model_file]
@@ -287,7 +284,7 @@ def main(
         rootgrp, vTd = createNetcdf4ParaviewHandle(
             output_filename, x, y, z, columns_to_use
         )
-        # rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(output_filename, x, y, z, columns_to_use)
+        rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(output_filename, x, y, z, columns_to_use)
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
                 for k in range(0, len(z), chunk_size):
@@ -329,9 +326,19 @@ def main(
                 filled_values = column_data[tuple(indices)]
                 vTd[column_index][:,:,:] = filled_values
 
+        columns = [np.array(vTd[column_index][:]) for column_index in range(len(columns_to_use))]
+        ss_array = np.stack([columns])
+        ss_array = np.einsum("nijk->ijkn",np.squeeze(ss_array))
+        ss_array = np.ascontiguousarray(ss_array)
+        # print(ss_array.shape)
+        ss_array_view = ss_array.view(dtype=mat_type8)
+        # print(seissol_mat[:].shape)
+        # print(ss_array_view.shape)
+        ss_array_view = ss_array_view.reshape(ss_array_view.shape[:-1])
+        seissol_mat[:] = ss_array_view
 
         rootgrp.close()
-        # rootgrp_ss.close()
+        rootgrp_ss.close()
     shutil.rmtree(temp_dir)
 
 

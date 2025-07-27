@@ -3,11 +3,18 @@
 // For more documentation on how to configure debug tasks,
 // see: https://zed.dev/docs/debugger
 [
-  {
-    "label": "Debug plot energy",
-    "program": "SeisSol/plot_energy_files.py",
-    "adapter": "Debugpy",
-    "request": "launch",
-    "args": ["Tests_Temp/energies"]
-  }
+    {
+        "label": "Debug plot energy",
+        "program": "SeisSol/plot_energy_files.py",
+        "adapter": "Debugpy",
+        "request": "launch",
+        "args": ["Tests_Temp/energies"]
+    },
+    {
+        "label": "Debug create_velocity_netcdf",
+        "program": "create_velocity_netcdf.py",
+        "adapter": "Debugpy",
+        "request": "launch",
+        "args": [""]
+    }
 ]
