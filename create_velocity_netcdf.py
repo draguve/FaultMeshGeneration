@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import subprocess
@@ -169,7 +170,7 @@ def createNetcdf4SeisSolHandle(
     mattype8 = np.dtype(ldata8)
     mat_t = rootgrp.createCompoundType(mattype4, "material")
     mat = rootgrp.createVariable("data", mat_t, ("w", "v", "u"))
-    return rootgrp, mat, mattype8
+    return rootgrp, mat, mattype4, mattype8
 
 
 def get_v_values(i, j, k, xg, yg, zg):
@@ -222,6 +223,9 @@ def main(
     replace_invalid: Annotated[
         bool,
         typer.Option(help="Replace invalid values with closest valid value"),
+    ] = True,
+    clamp_values: Annotated[
+        bool, typer.Option(help="Clamp values of density,Vs and Vp to minimum")
     ] = True,
 ):
     with h5py.File(meta_file, "r") as f:
@@ -284,8 +288,10 @@ def main(
         rootgrp, vTd = createNetcdf4ParaviewHandle(
             output_filename, x, y, z, ["rho", "mu", "lambda"]
         )
-        rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(
-            output_filename, x, y, z, ["rho", "mu", "lambda"]
+        rootgrp_ss, seissol_mat, mat_type4, mat_type8 = (
+            createNetcdf4SeisSolHandle(
+                output_filename, x, y, z, ["rho", "mu", "lambda"]
+            )
         )
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
@@ -333,6 +339,17 @@ def main(
                 filled_values = column_data[tuple(indices)]
                 temp_arrays[column_index][:, :, :] = filled_values
 
+        if clamp_values:
+            temp_arrays[0] = np.clip(  # density
+                temp_arrays[0], 2550.0, np.finfo(np.float32).max
+            )
+            temp_arrays[1] = np.clip(  # vs
+                temp_arrays[1], 1950.0, np.finfo(np.float32).max
+            )
+            temp_arrays[2] = np.clip(  # vp
+                temp_arrays[2], 3600.0, np.finfo(np.float32).max
+            )
+
         final_array = np.zeros(final_shape)
         density = temp_arrays[0]
         vs = temp_arrays[1]
@@ -342,12 +359,32 @@ def main(
         final_array[1] = np.square(vs) * density  # mu
         final_array[2] = (np.square(vp) - 2 * np.square(vs)) * density  # lambda
 
+        if clamp_values:
+            final_array[0] = np.clip(
+                final_array[0],
+                2550.0,
+                np.finfo(np.float32).max,
+            )
+            final_array[1] = np.clip(
+                final_array[1],
+                2550.0 * math.pow(1950.0, 2),
+                np.finfo(np.float32).max,
+            )
+            final_array[2] = np.clip(
+                final_array[2],
+                2550.0 * (3600.0**2 - 2 * (1950**2)),
+                np.finfo(np.float32).max,
+            )
+
         for i in range(3):
             vTd[i][:] = final_array[i]
 
-        seissol_mat[:]["rho"] = density
-        seissol_mat[:]["mu"] = final_array[1]
-        seissol_mat[:]["lambda"] = final_array[2]
+        seissol_array = np.zeros(final_shape[1:], dtype=mat_type4)
+        seissol_array["rho"] = final_array[0]
+        seissol_array["mu"] = final_array[1]
+        seissol_array["lambda"] = final_array[2]
+        seissol_mat[:] = seissol_array
+
         rootgrp.close()
         rootgrp_ss.close()
     shutil.rmtree(temp_dir)
