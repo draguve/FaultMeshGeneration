@@ -7,12 +7,12 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import scipy
 import typer
 from netCDF4 import Dataset
 from pathos.multiprocessing import ProcessPool
 from tqdm import tqdm
 from typing_extensions import Annotated
-import scipy
 
 temp_dir = tempfile.mkdtemp()
 app = typer.Typer(pretty_exceptions_show_locals=False)
@@ -21,7 +21,7 @@ GEOGRIDS_MODEL_FILE = None
 POINT_FIELD_RESOLUTION = None
 CHUNK_SIZE = None
 INVALID_VALUE = None
-COLUMNS_TO_USE = "Vs"
+COLUMNS_TO_USE = ["density", "Vs", "Vp"]
 
 
 def generate_random_id():
@@ -164,12 +164,13 @@ def createNetcdf4SeisSolHandle(
     vz[:] = z
 
     ldata4 = [(name, "f4") for name in aName]
-    ldata8 = [(name, "f4") for name in aName] # Does this work?
+    ldata8 = [(name, "f4") for name in aName]  # Does this work?
     mattype4 = np.dtype(ldata4)
     mattype8 = np.dtype(ldata8)
     mat_t = rootgrp.createCompoundType(mattype4, "material")
     mat = rootgrp.createVariable("data", mat_t, ("w", "v", "u"))
     return rootgrp, mat, mattype8
+
 
 def get_v_values(i, j, k, xg, yg, zg):
     original_shape = xg.shape
@@ -184,9 +185,10 @@ def get_v_values(i, j, k, xg, yg, zg):
 
 
 def get_clean_values(i, j, k, x_chunk, y_chunk, z_chunk):
-    xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing='ij')
+    xg, yg, zg = np.meshgrid(x_chunk, y_chunk, z_chunk, indexing="ij")
     _, _, _, values = get_v_values(i, j, k, xg, yg, zg)
     return i, j, k, values
+
 
 @app.command()
 def main(
@@ -217,12 +219,10 @@ def main(
     invalid_value: Annotated[
         float, typer.Option(help="Missing value")
     ] = -1.0e20,
-    replace_invalid: Annotated[bool, typer.Option(help="Replace invalid values with closest valid value")] = True,
-    columns_to_use: Annotated[
-        list[str], typer.Option(help="What column to get from geogrid model")
-    ] = [
-        "Vs",
-    ],
+    replace_invalid: Annotated[
+        bool,
+        typer.Option(help="Replace invalid values with closest valid value"),
+    ] = True,
 ):
     with h5py.File(meta_file, "r") as f:
         global \
@@ -238,11 +238,11 @@ def main(
             rotation_matrix, \
             COLUMNS_TO_USE
 
-        if len(geogrids_model_file)==0:
+        if len(geogrids_model_file) == 0:
             print("Need to specify atleast a single model file")
             exit(1)
 
-        COLUMNS_TO_USE = columns_to_use
+        columns_to_use = COLUMNS_TO_USE
         GEOGRIDS_MODEL_FILE = ",".join(
             [str(file) for file in geogrids_model_file]
         )
@@ -282,9 +282,11 @@ def main(
         z_chunks = []
 
         rootgrp, vTd = createNetcdf4ParaviewHandle(
-            output_filename, x, y, z, columns_to_use
+            output_filename, x, y, z, ["rho", "mu", "lambda"]
         )
-        rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(output_filename, x, y, z, columns_to_use)
+        rootgrp_ss, seissol_mat, mat_type8 = createNetcdf4SeisSolHandle(
+            output_filename, x, y, z, ["rho", "mu", "lambda"]
+        )
         for i in range(0, len(x), chunk_size):
             for j in range(0, len(y), chunk_size):
                 for k in range(0, len(z), chunk_size):
@@ -299,44 +301,53 @@ def main(
                     z_chunks.append(z_chunk)
                     # print(f"{vTd[0][i:i + chunk_size, j:j + chunk_size, k:k + chunk_size].shape} {x_chunk.shape} {y_chunk.shape} {z_chunk.shape}")
 
-
         processPool = ProcessPool(nodes=cores_to_use)
         results = processPool.imap(
             get_clean_values, idx, jdx, kdx, x_chunks, y_chunks, z_chunks
         )
+
+        final_shape = list(vTd[0].shape)
+        final_shape.insert(0, 3)
+        temp_arrays = np.zeros(final_shape)
 
         for result in tqdm(
             results, desc="Generating NetCDF", total=len(x_chunks)
         ):
             i, j, k, values = result
             for column_index, column in enumerate(values):
-                column = np.einsum('ijk->kji', column)
-                vTd[column_index][
-                    k : k + chunk_size,
-                    j : j + chunk_size,
-                    i : i + chunk_size
+                column = np.einsum("ijk->kji", column)
+                temp_arrays[column_index][
+                    k : k + chunk_size, j : j + chunk_size, i : i + chunk_size
                 ] = column
 
         if replace_invalid:
             for column_index in range(len(columns_to_use)):
-                print(f"Replacing invalid values with valid values for column {column_index}")
-                column_data = vTd[column_index][:]
+                print(
+                    f"Replacing invalid values with valid values for column {column_index}"
+                )
+                column_data = temp_arrays[column_index][:]
                 invalid_mask = column_data == INVALID_VALUE
-                indices = scipy.ndimage.distance_transform_edt(invalid_mask, return_indices=True, return_distances = False)
+                indices = scipy.ndimage.distance_transform_edt(
+                    invalid_mask, return_indices=True, return_distances=False
+                )
                 filled_values = column_data[tuple(indices)]
-                vTd[column_index][:,:,:] = filled_values
+                temp_arrays[column_index][:, :, :] = filled_values
 
-        columns = [np.array(vTd[column_index][:]) for column_index in range(len(columns_to_use))]
-        ss_array = np.stack([columns])
-        ss_array = np.einsum("nijk->ijkn",np.squeeze(ss_array))
-        ss_array = np.ascontiguousarray(ss_array)
-        # print(ss_array.shape)
-        ss_array_view = ss_array.view(dtype=mat_type8)
-        # print(seissol_mat[:].shape)
-        # print(ss_array_view.shape)
-        ss_array_view = ss_array_view.reshape(ss_array_view.shape[:-1])
-        seissol_mat[:] = ss_array_view
+        final_array = np.zeros(final_shape)
+        density = temp_arrays[0]
+        vs = temp_arrays[1]
+        vp = temp_arrays[2]
 
+        final_array[0] = density  # rho
+        final_array[1] = np.square(vs) * density  # mu
+        final_array[2] = (np.square(vp) - 2 * np.square(vs)) * density  # lambda
+
+        for i in range(3):
+            vTd[i][:] = final_array[i]
+
+        seissol_mat[:]["rho"] = density
+        seissol_mat[:]["mu"] = final_array[1]
+        seissol_mat[:]["lambda"] = final_array[2]
         rootgrp.close()
         rootgrp_ss.close()
     shutil.rmtree(temp_dir)
