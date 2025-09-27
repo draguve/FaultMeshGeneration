@@ -1,15 +1,16 @@
-import pandas as pd
-import string
-import random
-import math
-import numpy as np
-from fastkml import kml
-from shapely import wkt
-import matplotlib.pyplot as plt
 import csv
+import math
+import random
+import string
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import typer
-from typing_extensions import Annotated
+from fastkml import kml
 from geopy import distance
+from shapely import wkt
+from typing_extensions import Annotated
 
 QUADRUPLE_SIZE = 4
 
@@ -31,19 +32,24 @@ def remove_duplicate_points(data):
 
 
 def convert_from_multi_string(multi_line_string):
-    points = multi_line_string[17:-2].split(',')
+    points = multi_line_string[17:-2].split(",")
     lat_longs = []
     for point in points:
-        lat_longs.append([float(x) for x in point.split(" ") if x])  # removes empty string
+        lat_longs.append(
+            [float(x) for x in point.split(" ") if x]
+        )  # removes empty string
     lat_longs = np.array(lat_longs)
     return lat_longs
 
+
 def get_points(multi_line_string):
     # MULTILINESTRING((-121.5036249996688 37.03746799973482 0.0, -121.503775000355 37.03769099972591 0.0))
-    points = multi_line_string[17:-2].split(',')  # remove the text
+    points = multi_line_string[17:-2].split(",")  # remove the text
     lat_longs = []
     for point in points:
-        lat_longs.append([float(x) for x in point.split(" ") if x])  # removes empty string
+        lat_longs.append(
+            [float(x) for x in point.split(" ") if x]
+        )  # removes empty string
     lat_longs = np.array(lat_longs)
     return lat_longs
 
@@ -57,11 +63,11 @@ def get_multi_line_string(array):
 
 
 def get_random(N=10):
-    return ''.join(random.choices(string.ascii_letters, k=N))
+    return "".join(random.choices(string.ascii_letters, k=N))
 
 
 def read_csv(filename):
-    df = pd.read_csv(filename, encoding='utf-8')
+    df = pd.read_csv(filename, encoding="utf-8")
     return list(df.itertuples(index=False, name=None))
 
 
@@ -82,11 +88,12 @@ def catmull_rom_spline(P0, P1, P2, P3, distance_btw_points=1000, alpha=0.5):
         xi, yi = pi
         xj, yj = pj
         dx, dy = xj - xi, yj - yi
-        l = (dx ** 2 + dy ** 2) ** 0.5
-        return ti + l ** alpha
+        l = (dx**2 + dy**2) ** 0.5
+        return ti + l**alpha
 
-    distance_p1_p2 = distance.distance(P1[::-1],
-                                       P2[::-1]).m  # lat longs are for some reason stored in reverse in the strings
+    distance_p1_p2 = distance.distance(
+        P1[::-1], P2[::-1]
+    ).m  # lat longs are for some reason stored in reverse in the strings
     num_points = math.ceil(distance_p1_p2 / distance_btw_points)
 
     t0 = 0.0
@@ -104,9 +111,17 @@ def catmull_rom_spline(P0, P1, P2, P3, distance_btw_points=1000, alpha=0.5):
     return points
 
 
-def catmull_rom_chain(points, distance_btw_points=1000, cat_mull_room_alpha=0.5):
-    point_quadruples = ((points[idx + d] for d in range(QUADRUPLE_SIZE)) for idx in range(num_segments(points)))
-    all_splines = (catmull_rom_spline(*pq, distance_btw_points, alpha=cat_mull_room_alpha) for pq in point_quadruples)
+def catmull_rom_chain(
+    points, distance_btw_points=1000, cat_mull_room_alpha=0.5
+):
+    point_quadruples = (
+        (points[idx + d] for d in range(QUADRUPLE_SIZE))
+        for idx in range(num_segments(points))
+    )
+    all_splines = (
+        catmull_rom_spline(*pq, distance_btw_points, alpha=cat_mull_room_alpha)
+        for pq in point_quadruples
+    )
     return flatten(all_splines)
 
 
@@ -114,8 +129,11 @@ def generate_catmull_rom(points, distance_btw_points, cat_mull_room_alpha):
     start_point = mirror_point(points[1], points[0])
     end_point = mirror_point(points[-2], points[-1])
     extended_points = np.vstack((start_point, points, end_point))
-    chain_points = catmull_rom_chain(extended_points[:, 0:2], distance_btw_points=distance_btw_points,
-                                     cat_mull_room_alpha=cat_mull_room_alpha)
+    chain_points = catmull_rom_chain(
+        extended_points[:, 0:2],
+        distance_btw_points=distance_btw_points,
+        cat_mull_room_alpha=cat_mull_room_alpha,
+    )
     # assert len(chain_points) == num_segments(extended_points[:, 0:2]) * NUM_POINTS
     chain_points = np.vstack(chain_points)
     z = np.zeros((len(chain_points), 1), dtype=chain_points.dtype)
@@ -124,19 +142,41 @@ def generate_catmull_rom(points, distance_btw_points, cat_mull_room_alpha):
 
 
 def main(
-        input_filename: Annotated[str, typer.Argument(help="Path for a csv file, containing the input")],
-        csv_output: Annotated[str, typer.Option(help="Output csv")] = "",
-        plot: Annotated[bool, typer.Option(help="Show final fault before saving")] = False,
-        kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
-        disable_smoothing: Annotated[bool, typer.Option(help="Disables Catmull-Rom smoothing")] = False,
-        resolution: Annotated[int, typer.Option(
-            help="Distance(in m) between the points when using smoothing/Resolution of smoothed output")] = 1000,
-        cat_mull_room_alpha: Annotated[float, typer.Option(
-            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.")] = 0.5,
-        remove_close_points: Annotated[bool, typer.Option(help="Remove points if they're too close")] = True,
-        remove_threshold: Annotated[float, typer.Option(help="Threshold for removing points in m")] = 5.0,
-        print_distance: Annotated[bool, typer.Option(help="Print distance's between the points")] = False,
-        force_plot_points: Annotated[str, typer.Option(help="Plot extra points")] = "",
+    input_filename: Annotated[
+        str, typer.Argument(help="Path for a csv file, containing the input")
+    ],
+    csv_output: Annotated[str, typer.Option(help="Output csv")] = "",
+    plot: Annotated[
+        bool, typer.Option(help="Show final fault before saving")
+    ] = False,
+    kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
+    disable_smoothing: Annotated[
+        bool, typer.Option(help="Disables Catmull-Rom smoothing")
+    ] = False,
+    resolution: Annotated[
+        int,
+        typer.Option(
+            help="Distance(in m) between the points when using smoothing/Resolution of smoothed output"
+        ),
+    ] = 1000,
+    cat_mull_room_alpha: Annotated[
+        float,
+        typer.Option(
+            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline."
+        ),
+    ] = 0.5,
+    remove_close_points: Annotated[
+        bool, typer.Option(help="Remove points if they're too close")
+    ] = True,
+    remove_threshold: Annotated[
+        float, typer.Option(help="Threshold for removing points in m")
+    ] = 5.0,
+    print_distance: Annotated[
+        bool, typer.Option(help="Print distance's between the points")
+    ] = False,
+    force_plot_points: Annotated[
+        str, typer.Option(help="Plot extra points")
+    ] = "",
 ):
     data = read_csv(input_filename)
     lines = {}
@@ -147,8 +187,8 @@ def main(
             lines[id] = {}
             lines[id][0] = row
             continue
-        id = ''.join([i for i in to_join if not i.isdigit()])
-        location = int(''.join([i for i in to_join if i.isdigit()]))
+        id = "".join([i for i in to_join if not i.isdigit()])
+        location = int("".join([i for i in to_join if i.isdigit()]))
         if id not in lines:
             lines[id] = {}
         lines[id][location] = row
@@ -167,14 +207,16 @@ def main(
             multiline = paths[section_key][-1]
             points = get_points(multiline)
             all_points.append(points)
-        id = '-'.join([str(id) for id in gen_id])
+        id = "-".join([str(id) for id in gen_id])
         name = "-".join(gen_name)
         all_points = np.vstack(all_points)
         all_points = remove_duplicate_points(all_points)
         if disable_smoothing:
             extended_points, catmull = None, all_points
         else:
-            extended_points, catmull = generate_catmull_rom(all_points, resolution, cat_mull_room_alpha)
+            extended_points, catmull = generate_catmull_rom(
+                all_points, resolution, cat_mull_room_alpha
+            )
             catmull = catmull[0:-2]
         final_num_points += catmull.shape[0]
         outputs.append([id, name, "", all_points, extended_points, catmull])
@@ -183,7 +225,9 @@ def main(
     if remove_close_points:
         deleted_points = 0
         for output in outputs:
-            indexes = [0, ]
+            indexes = [
+                0,
+            ]
             last_added = 0
             rom = output[-1]
             for i in range(1, rom.shape[0]):
@@ -211,22 +255,46 @@ def main(
 
     if plot:
         for output in outputs:
-            plt.plot(output[3][:, 0], output[3][:, 1], c="blue", linestyle="-", linewidth=0.5)
+            plt.plot(
+                output[3][:, 0],
+                output[3][:, 1],
+                c="blue",
+                linestyle="-",
+                linewidth=0.5,
+            )
             if not disable_smoothing:
-                plt.plot(output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5)
-                plt.plot(output[4][:, 0], output[4][:, 1], linestyle="none", marker="o", c="green")
+                plt.plot(
+                    output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5
+                )
+                plt.plot(
+                    output[4][:, 0],
+                    output[4][:, 1],
+                    linestyle="none",
+                    marker="o",
+                    c="green",
+                )
 
         if force_plot_points != "":
-            extra_points = np.array(convert_from_multi_string(force_plot_points))
-            plt.plot(extra_points[:, 0], extra_points[:, 1], c="pink", linestyle="-", linewidth=0.5)
+            extra_points = np.array(
+                convert_from_multi_string(force_plot_points)
+            )
+            plt.plot(
+                extra_points[:, 0],
+                extra_points[:, 1],
+                c="pink",
+                linestyle="-",
+                linewidth=0.5,
+            )
             for i, data in enumerate(extra_points):
-                plt.text(data[0], data[1], f"Point {i}", fontsize=9, color='blue')
+                plt.text(
+                    data[0], data[1], f"Point {i}", fontsize=9, color="blue"
+                )
 
         # legend hack
-        plt.plot([], [], 'red', label="Smoothed")
-        plt.plot([], [], 'blue', label="Raw input")
+        plt.plot([], [], "red", label="Smoothed")
+        plt.plot([], [], "blue", label="Raw input")
 
-        plt.legend(loc='best')
+        plt.legend(loc="best")
         plt.show()
 
     # Create a KML document
@@ -241,17 +309,19 @@ def main(
                 geometry=geometry,
             )
             folder.append(placemark)
-        with open(kml_output, 'w') as f:
+        with open(kml_output, "w") as f:
             f.write(k.to_string(prettyprint=True))
 
     # write csv
     if csv_output != "":
-        with open(csv_output, 'w', newline="") as file:
+        with open(csv_output, "w", newline="") as file:
             csvwriter = csv.writer(file)
             csvwriter.writerow(["ID", "Name", "Geom"])
             for row in outputs:
-                csvwriter.writerow([row[0], row[1], get_multi_line_string(row[-1])])
+                csvwriter.writerow(
+                    [row[0], row[1], get_multi_line_string(row[-1])]
+                )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     typer.run(main)
