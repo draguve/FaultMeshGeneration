@@ -2,6 +2,7 @@ import csv
 import math
 import random
 import string
+from enum import Enum
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,6 +10,7 @@ import pandas as pd
 import typer
 from fastkml import kml
 from geopy import distance
+from scipy.interpolate import make_lsq_spline, make_splprep
 from shapely import wkt
 from typing_extensions import Annotated
 
@@ -141,6 +143,76 @@ def generate_catmull_rom(points, distance_btw_points, cat_mull_room_alpha):
     return np.vstack((start_point, end_point)), chain_points
 
 
+def get_distances(points: np.ndarray):
+    distances = []
+    for i in range(1, points.shape[0]):
+        p1 = points[i - 1][0:2]
+        p2 = points[i][0:2]
+        distance_p1_p2 = distance.distance(p1[::-1], p2[::-1]).m
+        distances.append(distance_p1_p2)
+    return distances
+
+
+def generate_bspline(
+    pts: np.ndarray,
+    distance_btw_points: float,
+):
+    distances = get_distances(pts)
+    num_points = math.floor(np.sum(distances) / distance_btw_points)
+    x, y = pts[:, 0], pts[:, 1]
+
+    distances.insert(0, 0)
+    v = np.cumsum(distances)
+    u = v / v[-1]
+
+    spline, u = make_splprep([x, y])
+    grid = np.linspace(0, 1, num_points)
+    new_points = spline(grid)
+    output_array = np.zeros((num_points, 3))
+    output_array[:, 0:2] = new_points.T
+    return None, output_array
+
+
+def generate_lsq_spline(pts: np.ndarray, distance_btw_points: float, n=3, k=3):
+    distances = get_distances(pts)
+    num_points = math.floor(np.sum(distances) / distance_btw_points)
+    x, y = pts[:, 0], pts[:, 1]
+
+    distances.insert(0, 0)
+    v = np.cumsum(distances)
+    u = v / v[-1]
+
+    t_int = np.linspace(0, 1, n + 2)[1:-1]
+    t_full = np.r_[np.repeat(u[0], k + 1), t_int, np.repeat(u[-1], k + 1)]
+
+    x_spline = make_lsq_spline(u, x, t_full, k)
+    y_spline = make_lsq_spline(u, y, t_full, k)
+
+    u_final = np.linspace(0, 1, num_points)
+    x_final = x_spline(u_final)
+    y_final = y_spline(u_final)
+
+    print(x_final)
+    print(y_final)
+
+    output_array = np.zeros((num_points, 3))
+    output_array[:, 0] = x_final
+    output_array[:, 1] = y_final
+
+    return None, output_array
+
+    # distances.insert(0, 0)
+    # v = np.cumsum(distances)
+    # u = v / v[-1]
+
+
+class SmoothingMode(str, Enum):
+    disabled = "disabled"
+    catmull = "catmull"
+    bspline = "bspline"
+    lsq = "lsq"
+
+
 def main(
     input_filename: Annotated[
         str, typer.Argument(help="Path for a csv file, containing the input")
@@ -150,9 +222,12 @@ def main(
         bool, typer.Option(help="Show final fault before saving")
     ] = False,
     kml_output: Annotated[str, typer.Option(help="Output kml")] = "",
-    disable_smoothing: Annotated[
-        bool, typer.Option(help="Disables Catmull-Rom smoothing")
-    ] = False,
+    smoothing: Annotated[
+        SmoothingMode,
+        typer.Option(
+            case_sensitive=False, help="Mode for smoothing the points"
+        ),
+    ] = SmoothingMode.bspline,
     resolution: Annotated[
         int,
         typer.Option(
@@ -162,7 +237,8 @@ def main(
     cat_mull_room_alpha: Annotated[
         float,
         typer.Option(
-            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline."
+            help="0.5 for the centripetal spline, 0.0 for the uniform spline, 1.0 for the chordal spline.",
+            rich_help_panel="Cat-Mul Rom Options",
         ),
     ] = 0.5,
     remove_close_points: Annotated[
@@ -176,6 +252,24 @@ def main(
     ] = False,
     force_plot_points: Annotated[
         str, typer.Option(help="Plot extra points")
+    ] = "",
+    lsq_n: Annotated[
+        int,
+        typer.Option(
+            rich_help_panel="LSQ Options",
+        ),
+    ] = 3,
+    lsq_k: Annotated[
+        int,
+        typer.Option(
+            rich_help_panel="LSQ Options",
+        ),
+    ] = 3,
+    save_image: Annotated[
+        str,
+        typer.Option(
+            help="Location to save the image of the plot",
+        ),
     ] = "",
 ):
     data = read_csv(input_filename)
@@ -211,15 +305,26 @@ def main(
         name = "-".join(gen_name)
         all_points = np.vstack(all_points)
         all_points = remove_duplicate_points(all_points)
-        if disable_smoothing:
-            extended_points, catmull = None, all_points
-        else:
-            extended_points, catmull = generate_catmull_rom(
-                all_points, resolution, cat_mull_room_alpha
-            )
-            catmull = catmull[0:-2]
-        final_num_points += catmull.shape[0]
-        outputs.append([id, name, "", all_points, extended_points, catmull])
+        match smoothing:
+            case SmoothingMode.disabled:
+                extended_points, curve = None, all_points
+            case SmoothingMode.catmull:
+                extended_points, curve = generate_catmull_rom(
+                    all_points, resolution, cat_mull_room_alpha
+                )
+                curve = curve[0:-2]
+            case SmoothingMode.bspline:
+                extended_points, curve = generate_bspline(
+                    all_points,
+                    distance_btw_points=resolution,
+                )
+            case SmoothingMode.lsq:
+                extended_points, curve = generate_lsq_spline(
+                    all_points, distance_btw_points=resolution, n=lsq_n, k=lsq_k
+                )
+
+        final_num_points += curve.shape[0]
+        outputs.append([id, name, "", all_points, extended_points, curve])
     print(f"Final paths have {final_num_points} points")
 
     if remove_close_points:
@@ -262,17 +367,18 @@ def main(
                 linestyle="-",
                 linewidth=0.5,
             )
-            if not disable_smoothing:
+            if smoothing != SmoothingMode.disabled:
                 plt.plot(
                     output[5][:, 0], output[5][:, 1], c="red", linewidth=0.5
                 )
-                plt.plot(
-                    output[4][:, 0],
-                    output[4][:, 1],
-                    linestyle="none",
-                    marker="o",
-                    c="green",
-                )
+                if output[4] is not None:
+                    plt.plot(
+                        output[4][:, 0],
+                        output[4][:, 1],
+                        linestyle="none",
+                        marker="o",
+                        c="green",
+                    )
 
         if force_plot_points != "":
             extra_points = np.array(
@@ -291,11 +397,15 @@ def main(
                 )
 
         # legend hack
-        plt.plot([], [], "red", label="Smoothed")
         plt.plot([], [], "blue", label="Raw input")
+        if smoothing != SmoothingMode.disabled:
+            plt.plot([], [], "red", label="Smoothed")
 
         plt.legend(loc="best")
-        plt.show()
+        if save_image != "":
+            plt.savefig(save_image)
+        else:
+            plt.show()
 
     # Create a KML document
     if kml_output != "":
