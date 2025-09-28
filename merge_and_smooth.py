@@ -191,9 +191,6 @@ def generate_lsq_spline(pts: np.ndarray, distance_btw_points: float, n=3, k=3):
     x_final = x_spline(u_final)
     y_final = y_spline(u_final)
 
-    print(x_final)
-    print(y_final)
-
     output_array = np.zeros((num_points, 3))
     output_array[:, 0] = x_final
     output_array[:, 1] = y_final
