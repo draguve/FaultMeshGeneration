@@ -154,8 +154,7 @@ def get_distances(points: np.ndarray):
 
 
 def generate_bspline(
-    pts: np.ndarray,
-    distance_btw_points: float,
+    pts: np.ndarray, distance_btw_points: float, smoothing: float, k: int
 ):
     distances = get_distances(pts)
     num_points = math.floor(np.sum(distances) / distance_btw_points)
@@ -165,7 +164,7 @@ def generate_bspline(
     v = np.cumsum(distances)
     u = v / v[-1]
 
-    spline, u = make_splprep([x, y])
+    spline, u = make_splprep([x, y], u=u, k=k, s=smoothing)
     grid = np.linspace(0, 1, num_points)
     new_points = spline(grid)
     output_array = np.zeros((num_points, 3))
@@ -265,6 +264,19 @@ def main(
             rich_help_panel="LSQ Options",
         ),
     ] = 3,
+    bspline_smooth: Annotated[
+        float,
+        typer.Option(
+            help="0 forces it to go through all the points",
+            rich_help_panel="B Spline Options",
+        ),
+    ] = 0,
+    bspline_k: Annotated[
+        int,
+        typer.Option(
+            rich_help_panel="B Spline Options",
+        ),
+    ] = 3,
     save_image: Annotated[
         str,
         typer.Option(
@@ -317,6 +329,8 @@ def main(
                 extended_points, curve = generate_bspline(
                     all_points,
                     distance_btw_points=resolution,
+                    smoothing=bspline_smooth,
+                    k=bspline_k,
                 )
             case SmoothingMode.lsq:
                 extended_points, curve = generate_lsq_spline(
