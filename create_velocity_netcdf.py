@@ -173,6 +173,7 @@ def createNetcdf4SeisSolHandle(
     return rootgrp, mat, mattype4, mattype8
 
 
+# TODO this errors out if it gets an array that has a shape of (1,6)
 def get_v_values(i, j, k, xg, yg, zg):
     original_shape = xg.shape
     points = np.stack([xg.flatten(), yg.flatten(), zg.flatten()]).T
